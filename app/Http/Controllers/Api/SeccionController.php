@@ -157,8 +157,10 @@ class SeccionController extends Controller
                     // Verificar via pensum_curso si alguno de los cursos ya asignados
                     // pertenece al mismo ciclo
                     $q->whereHas('pensums', function ($q2) use ($cicloDelCurso) {
-                        $q2->wherePivot('ciclo_semestre', $cicloDelCurso)
-                           ->wherePivot('estado', 'activo');
+                        // wherePivot() genera SQL incorrecto en este contexto.
+                        // Usar where() con el nombre real de la tabla pivote.
+                        $q2->where('pensum_curso.ciclo_semestre', $cicloDelCurso)
+                           ->where('pensum_curso.estado', 'activo');
                     });
                 })
                 ->exists();
