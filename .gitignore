@@ -1,0 +1,10 @@
+/vendor
+/node_modules
+/.env
+/.env.backup
+/.env.production
+/storage/*.key
+/storage/logs/*.log
+.phpunit.result.cache
+.DS_Store
+__MACOSX
