@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\DisponibilidadDocenteController;
 use App\Http\Controllers\Api\DocenteController;
 use App\Http\Controllers\Api\FacultadController;
 use App\Http\Controllers\Api\HistorialController;
+use App\Http\Controllers\Api\GeneracionHorarioController;
 use App\Http\Controllers\Api\HorarioController;
 use App\Http\Controllers\Api\NotificacionController;
 use App\Http\Controllers\Api\ReporteController;
@@ -176,6 +177,9 @@ Route::middleware('auth:sanctum')->group(function () {
         // ORDEN CRÍTICO: rutas literales ANTES de horarios/{horario}
         Route::get('horarios',                [HorarioController::class, 'index']);
         Route::get('horarios/por-carrera',    [HorarioController::class, 'porCarrera']);
+        // ── Generación automática (PARENTESIS técnico) ─────────────
+        // Literal 'generar' ANTES de horarios/{horario} — evita colisión de ruta.
+        Route::post('horarios/generar', [GeneracionHorarioController::class, 'generar']);
 
         Route::get('horarios/{horario}',                            [HorarioController::class, 'show']);
         Route::get('horarios/{horario}/detalles',                   [HorarioController::class, 'detalles']);

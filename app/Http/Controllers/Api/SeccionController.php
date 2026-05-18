@@ -172,13 +172,22 @@ class SeccionController extends Controller
             }
         }
 
-        $asignacion = AsignacionDocenteCurso::create([
-            'id_docente'         => $request->id_docente,
-            'id_seccion'         => $idSeccion,
-            'estado'             => 'activo',
-            'fecha_asignacion'   => now(),
-            'fecha_actualizacion'=> now(),
-        ]);
+        // OPCIÓN B — updateOrCreate para respetar el UNIQUE(id_seccion) de la BD.
+        // Si existe un registro inactivo para esta sección (estado='inactivo' tras
+        // una desasignación previa), lo reactivamos con el nuevo docente en lugar
+        // de intentar un INSERT que violaría el índice UNIQUE.
+        // Si no existe ningún registro previo, se crea uno nuevo (comportamiento original).
+        $asignacion = AsignacionDocenteCurso::updateOrCreate(
+            // Clave de búsqueda: sección (el UNIQUE que choca)
+            ['id_seccion' => $idSeccion],
+            // Valores a establecer (creación o actualización)
+            [
+                'id_docente'          => $request->id_docente,
+                'estado'              => 'activo',
+                'fecha_asignacion'    => now(),
+                'fecha_actualizacion' => now(),
+            ]
+        );
 
         HistorialService::registrar(
             tabla:      'asignacion_docente_curso',
