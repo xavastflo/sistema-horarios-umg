@@ -9,18 +9,25 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('facultad', function (Blueprint $table) {
-            // SQL oficial: smallint(5) UNSIGNED AUTO_INCREMENT
             $table->unsignedSmallInteger('id_facultad')->autoIncrement();
-            // SQL oficial: varchar(100)
-            $table->string('nombre_facultad', 100)->unique();
-            // SQL oficial: varchar(20) DEFAULT NULL (nullable en el SQL oficial)
-            $table->string('codigo_facultad', 20)->unique()->nullable();
-            // SQL oficial: varchar(200)
+
+            // FK a sede — obligatoria, sin cascade (evita borrados accidentales)
+            $table->unsignedSmallInteger('id_centro_educativo');
+            $table->foreign('id_centro_educativo', 'fk_facultad_centro')
+                  ->references('id_centro_educativo')
+                  ->on('centro_educativo')
+                  ->restrictOnDelete();   // QA: restrictOnDelete en lugar de cascade
+
+            $table->string('nombre_facultad', 100);  // unique compuesto, no global
+            $table->string('codigo_facultad', 20)->nullable();
             $table->string('descripcion', 200)->nullable();
-            // SQL oficial: ENUM('activo','inactivo')
             $table->enum('estado', ['activo', 'inactivo'])->default('activo');
             $table->dateTime('fecha_creacion')->useCurrent();
             $table->dateTime('fecha_actualizacion')->useCurrent()->useCurrentOnUpdate();
+
+            // QA: unicidad compuesta por sede — permite mismo nombre en distintas sedes
+            $table->unique(['id_centro_educativo', 'nombre_facultad'], 'uid_sede_nombre_facultad');
+            $table->unique(['id_centro_educativo', 'codigo_facultad'], 'uid_sede_codigo_facultad');
         });
     }
 

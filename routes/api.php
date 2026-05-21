@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BloqueHorarioController;
 use App\Http\Controllers\Api\CarreraController;
 use App\Http\Controllers\Api\CatalogoController;
+use App\Http\Controllers\Api\CentroEducativoController;
 use App\Http\Controllers\Api\CursoController;
 use App\Http\Controllers\Api\DisponibilidadDocenteController;
 use App\Http\Controllers\Api\DocenteController;
@@ -79,6 +80,13 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('usuarios/{usuario}/roles/{rol}', [UsuarioController::class, 'quitarRol']);
 
         // Facultades
+        // ── Centros Educativos (Sedes) ─────────────────────────
+        Route::get('centros-educativos',              [CentroEducativoController::class, 'index']);
+        Route::post('centros-educativos',             [CentroEducativoController::class, 'store']);
+        Route::get('centros-educativos/{id}',         [CentroEducativoController::class, 'show']);
+        Route::put('centros-educativos/{id}',         [CentroEducativoController::class, 'update']);
+        Route::delete('centros-educativos/{id}',      [CentroEducativoController::class, 'destroy']);
+
         Route::get('facultades',               [FacultadController::class, 'index']);
         Route::post('facultades',              [FacultadController::class, 'store']);
         Route::get('facultades/{facultad}',    [FacultadController::class, 'show']);

@@ -3,21 +3,19 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-class Facultad extends Model
+class CentroEducativo extends Model
 {
-    protected $table      = 'facultad';
-    protected $primaryKey = 'id_facultad';
+    protected $table      = 'centro_educativo';
+    protected $primaryKey = 'id_centro_educativo';
     public    $timestamps = false;
     protected $keyType    = 'int';
 
     protected $fillable = [
-        'id_centro_educativo',
-        'nombre_facultad',
-        'codigo_facultad',
-        'descripcion',
+        'nombre',
+        'codigo_sede',
+        'direccion',
         'estado',
     ];
 
@@ -27,19 +25,14 @@ class Facultad extends Model
     ];
 
     // ── Relaciones ──────────────────────────────────────────
-    public function centroEducativo(): BelongsTo
+    public function facultades(): HasMany
     {
-        return $this->belongsTo(CentroEducativo::class, 'id_centro_educativo', 'id_centro_educativo');
+        return $this->hasMany(Facultad::class, 'id_centro_educativo', 'id_centro_educativo');
     }
 
-    public function carreras(): HasMany
+    public function facultadesActivas(): HasMany
     {
-        return $this->hasMany(Carrera::class, 'id_facultad', 'id_facultad');
-    }
-
-    public function carrerasActivas(): HasMany
-    {
-        return $this->carreras()->where('estado', 'activo');
+        return $this->facultades()->where('estado', 'activo');
     }
 
     // ── Scopes ───────────────────────────────────────────────

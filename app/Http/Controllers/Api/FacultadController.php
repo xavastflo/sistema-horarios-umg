@@ -17,7 +17,8 @@ class FacultadController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = Facultad::withCount(['carreras', 'carrerasActivas'])
+        $query = Facultad::with('centroEducativo')
+            ->withCount(['carreras', 'carrerasActivas'])
             ->when($request->estado, fn($q) => $q->where('estado', $request->estado))
             ->when($request->buscar, fn($q) => $q->where(function ($q2) use ($request) {
                 $q2->where('nombre_facultad', 'like', "%{$request->buscar}%")
@@ -34,11 +35,12 @@ class FacultadController extends Controller
     public function store(StoreFacultadRequest $request): JsonResponse
     {
         $facultad = Facultad::create([
-            'nombre_facultad' => $request->nombre_facultad,
-            'codigo_facultad' => $request->codigo_facultad ? strtoupper($request->codigo_facultad) : null,
-            'descripcion'     => $request->descripcion,
-            'estado'          => 'activo',       // ENUM string
-            'fecha_creacion'  => now(),
+            'id_centro_educativo' => $request->id_centro_educativo,
+            'nombre_facultad'     => $request->nombre_facultad,
+            'codigo_facultad'     => $request->codigo_facultad ? strtoupper($request->codigo_facultad) : null,
+            'descripcion'         => $request->descripcion,
+            'estado'              => 'activo',
+            'fecha_creacion'      => now(),
         ]);
 
         HistorialService::registrarCreacion($facultad, 'facultad');
@@ -62,7 +64,7 @@ class FacultadController extends Controller
     {
         $facultad = Facultad::findOrFail($id);
 
-        $datos = $request->only(['nombre_facultad', 'descripcion', 'estado']);
+        $datos = $request->only(['id_centro_educativo', 'nombre_facultad', 'descripcion', 'estado']);
         if ($request->has('codigo_facultad')) {
             $datos['codigo_facultad'] = strtoupper($request->codigo_facultad);
         }
