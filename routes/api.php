@@ -19,6 +19,7 @@ use App\Http\Controllers\Api\PensumController;
 use App\Http\Controllers\Api\PeriodoAcademicoController;
 use App\Http\Controllers\Api\SeccionController;
 use App\Http\Controllers\Api\UsuarioController;
+use App\Http\Controllers\Api\PensumImportController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -79,14 +80,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('usuarios/{usuario}/roles',         [UsuarioController::class, 'asignarRol']);
         Route::delete('usuarios/{usuario}/roles/{rol}', [UsuarioController::class, 'quitarRol']);
 
-        // Facultades
-        // ── Centros Educativos (Sedes) ─────────────────────────
+        // Centros Educativos (Sedes)
         Route::get('centros-educativos',              [CentroEducativoController::class, 'index']);
         Route::post('centros-educativos',             [CentroEducativoController::class, 'store']);
         Route::get('centros-educativos/{id}',         [CentroEducativoController::class, 'show']);
         Route::put('centros-educativos/{id}',         [CentroEducativoController::class, 'update']);
         Route::delete('centros-educativos/{id}',      [CentroEducativoController::class, 'destroy']);
 
+        // Facultades
         Route::get('facultades',               [FacultadController::class, 'index']);
         Route::post('facultades',              [FacultadController::class, 'store']);
         Route::get('facultades/{facultad}',    [FacultadController::class, 'show']);
@@ -100,13 +101,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('carreras/{carrera}/coordinador',   [CarreraController::class, 'asignarCoordinador']);
         Route::delete('carreras/{carrera}/coordinador', [CarreraController::class, 'desasignarCoordinador']);
 
-        // Historial
-
-        // ── Horarios — transiciones administrativas (Paso 6) ──────
+        // Horarios — transiciones administrativas (Paso 6)
         Route::patch('horarios/{horario}/aprobar',   [HorarioController::class, 'aprobar']);
         Route::patch('horarios/{horario}/bloquear',  [HorarioController::class, 'bloquear']);
         Route::patch('horarios/{horario}/publicar',  [HorarioController::class, 'publicar']);
 
+        // Historial
         Route::get('historial',              [HistorialController::class, 'index']);
         Route::get('historial/{tabla}/{id}', [HistorialController::class, 'porRegistro']);
     });
@@ -119,10 +119,9 @@ Route::middleware('auth:sanctum')->group(function () {
         // Carreras — lectura y jornadas
         Route::get('carreras',                    [CarreraController::class, 'index']);
         Route::get('carreras/{carrera}',          [CarreraController::class, 'show']);
-        Route::post('carreras/{carrera}/jornadas',[CarreraController::class, 'asignarJornadas']);
+        Route::post('carreras/{carrera}/jornadas', [CarreraController::class, 'asignarJornadas']);
 
-        // ── Docentes ──────────────────────────────────────────────
-        // ORDEN: rutas literales antes que rutas con {docente}
+        // Docentes (Rutas literales antes que dinámicas)
         Route::get('docentes',                       [DocenteController::class, 'index']);
         Route::post('docentes',                      [DocenteController::class, 'store']);
         Route::get('docentes/{docente}',             [DocenteController::class, 'show']);
@@ -148,7 +147,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('cursos/{curso}',    [CursoController::class, 'update']);
         Route::delete('cursos/{curso}', [CursoController::class, 'destroy']);
 
-        // Pensums
+        // ── Rutas de Carga Masiva de Pensums (¡Evita la colisión de parámetros!) ──
+        Route::get('pensums/plantilla-csv',        [PensumImportController::class, 'descargarPlantilla']);
+        Route::post('pensums/{pensum}/import-csv', [PensumImportController::class, 'importarCSV']);
+
+        // Pensums (CRUD clásico)
         Route::get('pensums',                                  [PensumController::class, 'index']);
         Route::post('pensums',                                 [PensumController::class, 'store']);
         Route::get('pensums/{pensum}',                         [PensumController::class, 'show']);
@@ -159,47 +162,37 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('pensums/{pensum}/cursos/{pensumCurso}', [PensumController::class, 'quitarCurso']);
         Route::patch('pensums/{pensum}/cursos/{pensumCurso}',  [PensumController::class, 'actualizarCiclo']);
 
-        // ── Bloques horarios ──────────────────────────────────────
-        // ORDEN CRÍTICO: 'generar' (literal) ANTES de '{bloque}' (dinámico)
-        // Si '{bloque}' fuera primero, la URL /bloques-horario/generar
-        // se resolvería como id_bloque = "generar" → 404 de modelo.
+        // Bloques horarios (Rutas literales antes que dinámicas)
         Route::get('bloques-horario',              [BloqueHorarioController::class, 'index']);
         Route::post('bloques-horario',             [BloqueHorarioController::class, 'store']);
-        Route::post('bloques-horario/generar',     [BloqueHorarioController::class, 'generar']);    // ← literal primero
+        Route::post('bloques-horario/generar',     [BloqueHorarioController::class, 'generar']);
         Route::get('bloques-horario/{bloque}',     [BloqueHorarioController::class, 'show']);
         Route::delete('bloques-horario/{bloque}',  [BloqueHorarioController::class, 'destroy']);
         Route::get('carrera-jornadas/{carreraJornada}/bloques', [BloqueHorarioController::class, 'porCarreraJornada']);
 
         // Secciones
-        Route::get('secciones',              [SeccionController::class, 'index']);
-        Route::post('secciones',             [SeccionController::class, 'store']);
-        Route::get('secciones/{seccion}',    [SeccionController::class, 'show']);
-        Route::delete('secciones/{seccion}', [SeccionController::class, 'destroy']);
+        Route::get('secciones',                         [SeccionController::class, 'index']);
+        Route::post('secciones',                        [SeccionController::class, 'store']);
+        Route::get('secciones/{seccion}',               [SeccionController::class, 'show']);
+        Route::delete('secciones/{seccion}',            [SeccionController::class, 'destroy']);
         Route::get('secciones/{seccion}/asignacion',    [SeccionController::class, 'asignacion']);
         Route::post('secciones/{seccion}/asignacion',   [SeccionController::class, 'asignarDocente']);
         Route::delete('secciones/{seccion}/asignacion', [SeccionController::class, 'quitarDocente']);
 
-        // ── Horarios — Sprint 3 Paso 5 (edición manual) ────────────
-        // ORDEN: literal 'transiciones' antes de '{detalle}' (dinámico)
-        // ── Horarios — Sprint 4 Paso 1 (consulta) ─────────────────
-        // ORDEN CRÍTICO: rutas literales ANTES de horarios/{horario}
-        Route::get('horarios',                [HorarioController::class, 'index']);
-        Route::get('horarios/por-carrera',    [HorarioController::class, 'porCarrera']);
-        // ── Generación automática (PARENTESIS técnico) ─────────────
-        // Literal 'generar' ANTES de horarios/{horario} — evita colisión de ruta.
-        Route::post('horarios/generar', [GeneracionHorarioController::class, 'generar']);
-
-        Route::get('horarios/{horario}',                            [HorarioController::class, 'show']);
-        Route::get('horarios/{horario}/detalles',                   [HorarioController::class, 'detalles']);
-        Route::get('horarios/{horario}/transiciones',               [HorarioController::class, 'transicionesDisponibles']);
-        Route::get('horarios/{horario}/completo',              [HorarioController::class, 'completo']);
-        Route::patch('horarios/{horario}/detalles/{detalle}/mover',[HorarioController::class, 'moverDetalle']);
+        // Horarios (Consulta y Generación automática)
+        Route::get('horarios',                 [HorarioController::class, 'index']);
+        Route::get('horarios/por-carrera',     [HorarioController::class, 'porCarrera']);
+        Route::post('horarios/generar',        [GeneracionHorarioController::class, 'generar']);
+        Route::get('horarios/{horario}',       [HorarioController::class, 'show']);
+        Route::get('horarios/{horario}/detalles', [HorarioController::class, 'detalles']);
+        Route::get('horarios/{horario}/transiciones', [HorarioController::class, 'transicionesDisponibles']);
+        Route::get('horarios/{horario}/completo', [HorarioController::class, 'completo']);
+        Route::patch('horarios/{horario}/detalles/{detalle}/mover', [HorarioController::class, 'moverDetalle']);
         Route::delete('horarios/{horario}/detalles/{detalle}',     [HorarioController::class, 'eliminarDetalle']);
 
-        // ── Asignaciones ──────────────────────────────────────────
-        // ORDEN: ruta con subruta literal antes que ruta con {asignacion}
+        // Asignaciones (Rutas literales antes que dinámicas)
         Route::get('asignaciones',                                     [AsignacionDocenteCursoController::class, 'index']);
-        Route::get('asignaciones/docente/{docente}/periodo/{periodo}', [AsignacionDocenteCursoController::class, 'porDocenteYPeriodo']); // ← literal primero
+        Route::get('asignaciones/docente/{docente}/periodo/{periodo}', [AsignacionDocenteCursoController::class, 'porDocenteYPeriodo']);
         Route::get('asignaciones/{asignacion}',                        [AsignacionDocenteCursoController::class, 'show']);
     });
 
@@ -208,14 +201,8 @@ Route::middleware('auth:sanctum')->group(function () {
     // ─────────────────────────────────────────────────────────────
     Route::middleware('rol:docente')->group(function () {
 
-        // GET /api/docente/horario — clases del docente autenticado
-        // Fuera del namespace horarios/* para evitar colisión con
-        // horarios/{horario}, que se registra antes globalmente.
         Route::get('docente/horario', [HorarioController::class, 'miHorario']);
 
-        // GET /api/perfil/docente
-        // Fuera del namespace docentes/* para evitar colisión con
-        // docentes/{docente}, que queda registrada antes en la tabla global.
         Route::get('perfil/docente', function (\Illuminate\Http\Request $request) {
             $docente = $request->user()->docente()->with('usuario')->first();
             if (! $docente) {
@@ -224,8 +211,7 @@ Route::middleware('auth:sanctum')->group(function () {
             return response()->json($docente);
         });
 
-        // Disponibilidad — el docente gestiona sus propios bloques no disponibles.
-        // ORDEN: toggle (literal) ANTES de store (genérico), mismo prefijo POST.
+        // Disponibilidad
         Route::get('docentes/{docente}/disponibilidad',                     [DisponibilidadDocenteController::class, 'index']);
         Route::post('docentes/{docente}/disponibilidad/toggle',             [DisponibilidadDocenteController::class, 'toggle']);
         Route::post('docentes/{docente}/disponibilidad',                    [DisponibilidadDocenteController::class, 'store']);
@@ -234,16 +220,15 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // ─────────────────────────────────────────────────────────────
     // Notificaciones — accesibles para cualquier usuario autenticado
-    // ORDEN: rutas literales (no-leidas, leer-todas) ANTES de {id}
     // ─────────────────────────────────────────────────────────────
-    Route::get('notificaciones',                   [NotificacionController::class, 'index']);
-    Route::get('notificaciones/no-leidas',         [NotificacionController::class, 'noLeidas']);
-    Route::patch('notificaciones/leer-todas',      [NotificacionController::class, 'leerTodas']);
-    Route::patch('notificaciones/{id}/leer',       [NotificacionController::class, 'leer']);
-    Route::delete('notificaciones/{id}',           [NotificacionController::class, 'destroy']);
+    Route::get('notificaciones',               [NotificacionController::class, 'index']);
+    Route::get('notificaciones/no-leidas',     [NotificacionController::class, 'noLeidas']);
+    Route::patch('notificaciones/leer-todas',  [NotificacionController::class, 'leerTodas']);
+    Route::patch('notificaciones/{id}/leer',   [NotificacionController::class, 'leer']);
+    Route::delete('notificaciones/{id}',       [NotificacionController::class, 'destroy']);
 
     // ─────────────────────────────────────────────────────────────
-    // Reportes PDF/Excel — Sprint 4 Paso 3
+    // Reportes PDF/Excel
     // ─────────────────────────────────────────────────────────────
     Route::middleware('rol:administrador,coordinador')->group(function () {
         Route::get('reportes/horario-carrera',        [ReporteController::class, 'horarioCarrera']);
@@ -259,8 +244,6 @@ Route::middleware('auth:sanctum')->group(function () {
     // ROL: estudiante — solo horarios publicados
     // ─────────────────────────────────────────────────────────────
     Route::middleware('rol:estudiante')->group(function () {
-        // GET /api/estudiante/horario — fuera del namespace horarios/* para
-        // evitar colisión con horarios/{horario} registrada antes globalmente.
         Route::get('estudiante/horario', [HorarioController::class, 'estudianteHorario']);
     });
 
