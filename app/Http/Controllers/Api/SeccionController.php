@@ -95,6 +95,8 @@ class SeccionController extends Controller
     public function show(int $id): JsonResponse
     {
         $seccion = Seccion::with([
+            'carreraJornada.jornada',
+            'carreraJornada.carrera',
             'curso',
             'periodoAcademico',
             'asignacionActiva.docente.usuario',
