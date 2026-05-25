@@ -101,9 +101,17 @@ class CarreraController extends Controller
         $carrera = Carrera::findOrFail($id);
         $usuario = Usuario::findOrFail($request->id_usuario);
 
+        // Validar que el usuario esté activo
+        if ($usuario->estado !== 'activo') {
+            return response()->json([
+                'message' => 'El usuario seleccionado no está activo en el sistema.',
+            ], 422);
+        }
+
+        // Validar que el usuario tenga rol coordinador activo
         if (! $usuario->tieneRol('coordinador')) {
             return response()->json([
-                'message' => 'El usuario seleccionado no tiene el rol de coordinador.',
+                'message' => 'El usuario seleccionado no tiene el rol de coordinador activo.',
             ], 422);
         }
 

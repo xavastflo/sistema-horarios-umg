@@ -7,7 +7,6 @@ use App\Http\Requests\Seccion\StoreSeccionRequest;
 use App\Http\Requests\AsignacionDocenteCurso\StoreAsignacionRequest;
 use App\Models\AsignacionDocenteCurso;
 use App\Models\Docente;
-use App\Models\PensumCurso;
 use App\Models\Seccion;
 use App\Services\HistorialService;
 use Illuminate\Http\JsonResponse;
@@ -164,32 +163,69 @@ class SeccionController extends Controller
         }
 
         // REGLA 3: Un docente no puede tener más de un curso del mismo ciclo/semestre
-        // Se obtiene el ciclo del curso en cualquier pensum activo del período
-        $cicloDelCurso = PensumCurso::where('id_curso', $seccion->id_curso)
-            ->where('estado', 'activo')
-            ->value('ciclo_semestre');
+        // CORRECCIÓN: ciclo_semestre se obtiene anclado a la carrera real de la sección,
+        // navegando seccion.id_carrera_jornada → carrera_jornada.id_carrera → pensum activo.
+        $seccionConJornada = Seccion::with('carreraJornada')->findOrFail($idSeccion);
+        $idCarreraReal     = $seccionConJornada->carreraJornada?->id_carrera;
 
-        if ($cicloDelCurso) {
-            $tieneMismoCiclo = AsignacionDocenteCurso::where('id_docente', $request->id_docente)
+        if (! $idCarreraReal) {
+            return response()->json([
+                'message' => 'No se pudo determinar la carrera de la sección. Verifique que tenga una carrera-jornada asignada.',
+            ], 422);
+        }
+
+        $cicloDelCurso = DB::table('pensum_curso as pc')
+            ->join('pensum as p', 'pc.id_pensum', '=', 'p.id_pensum')
+            ->where('pc.id_curso',  $seccion->id_curso)
+            ->where('pc.estado',    'activo')
+            ->where('p.id_carrera', $idCarreraReal)
+            ->where('p.estado',     'activo')
+            ->value('pc.ciclo_semestre');
+
+        if ($cicloDelCurso === null) {
+            return response()->json([
+                'message' => 'El curso no pertenece a un pensum activo de la carrera/jornada de esta sección. Verifique el pensum antes de asignar el docente.',
+            ], 422);
+        }
+
+        $tieneMismoCiclo = AsignacionDocenteCurso::where('id_docente', $request->id_docente)
+            ->where('estado', 'activo')
+            ->whereHas('seccion', fn($q) => $q->where('id_periodo_academico', $seccion->id_periodo_academico))
+            ->whereHas('seccion.carreraJornada', fn($q) => $q->where('id_carrera', $idCarreraReal))
+            ->whereHas('seccion.curso', function ($q) use ($cicloDelCurso, $idCarreraReal) {
+                $q->whereHas('pensumCursos', function ($q2) use ($cicloDelCurso, $idCarreraReal) {
+                    $q2->where('pensum_curso.ciclo_semestre', $cicloDelCurso)
+                       ->where('pensum_curso.estado', 'activo')
+                       ->whereHas('pensum', fn($q3) => $q3->where('id_carrera', $idCarreraReal)->where('estado', 'activo'));
+                });
+            })
+            ->exists();
+
+        if ($tieneMismoCiclo) {
+            return response()->json([
+                'message' => "El docente ya tiene un curso asignado del ciclo {$cicloDelCurso} en esta carrera y período. No puede impartir más de uno por ciclo.",
+            ], 422);
+        }
+
+        // REGLA 4 (condicional): Validación de disponibilidad docente
+        // Solo se aplica si la sección ya tiene detalles de horario activos.
+        // Si aún no tiene bloques asignados, no se bloquea en esta etapa.
+        $bloquesAsignados = DB::table('detalle_horario as dh')
+            ->join('asignacion_docente_curso as adc', 'dh.id_asignacion_docente_curso', '=', 'adc.id_asignacion_docente_curso')
+            ->where('adc.id_seccion', $idSeccion)
+            ->where('dh.estado', 'activo')
+            ->pluck('dh.id_bloque_horario');
+
+        if ($bloquesAsignados->isNotEmpty()) {
+            $conflictoDisponibilidad = DB::table('disponibilidad_docente')
+                ->where('id_docente', $request->id_docente)
+                ->whereIn('id_bloque_horario', $bloquesAsignados)
                 ->where('estado', 'activo')
-                ->whereHas('seccion', function ($q) use ($seccion) {
-                    $q->where('id_periodo_academico', $seccion->id_periodo_academico);
-                })
-                ->whereHas('seccion.curso', function ($q) use ($cicloDelCurso) {
-                    // Verificar via pensum_curso si alguno de los cursos ya asignados
-                    // pertenece al mismo ciclo
-                    $q->whereHas('pensums', function ($q2) use ($cicloDelCurso) {
-                        // wherePivot() genera SQL incorrecto en este contexto.
-                        // Usar where() con el nombre real de la tabla pivote.
-                        $q2->where('pensum_curso.ciclo_semestre', $cicloDelCurso)
-                           ->where('pensum_curso.estado', 'activo');
-                    });
-                })
                 ->exists();
 
-            if ($tieneMismoCiclo) {
+            if ($conflictoDisponibilidad) {
                 return response()->json([
-                    'message' => "El docente ya tiene un curso asignado del ciclo {$cicloDelCurso} en este período. No puede impartir más de uno por ciclo.",
+                    'message' => 'El docente tiene marcada restricción de disponibilidad en uno o más bloques horarios ya asignados a esta sección. Revise la disponibilidad docente antes de asignar.',
                 ], 422);
             }
         }
