@@ -102,17 +102,21 @@ class GeneradorParcialService
             );
         }
 
-        // ── Cargar secciones del período/carrera ────────────────
+        // ── Cargar secciones del período/carrera/jornada ────────
         // Query A: secciones con docente asignado, ordenadas por prioridad
+        // REINGENIERÍA: filtradas por id_carrera_jornada para aislar la jornada
         $asignaciones = $this->cargarAsignacionesOrdenadas(
             $horario->id_carrera,
             $periodo->id_periodo_academico,
+            $idCarreraJornada,
         );
 
         // Query B: secciones activas SIN docente asignado
+        // REINGENIERÍA: filtradas por id_carrera_jornada
         $seccionesSinDocente = $this->cargarSeccionesSinDocente(
             $horario->id_carrera,
             $periodo->id_periodo_academico,
+            $idCarreraJornada,
         );
 
         // ── Estado en memoria ───────────────────────────────────
@@ -271,6 +275,7 @@ class GeneradorParcialService
                 $noAsignables->count(),
                 $tiempoMs,
             ),
+            idCarreraJornada: $idCarreraJornada,
         );
     }
 
@@ -314,15 +319,25 @@ class GeneradorParcialService
      * Incluye ciclo_semestre del pensum activo de esta carrera/período
      * para los filtros de traslape de ciclo en memoria.
      */
+    /**
+     * Query A — Secciones con docente asignado, filtradas por jornada.
+     *
+     * REINGENIERÍA: ahora acepta id_carrera_jornada y filtra directamente
+     * por seccion.id_carrera_jornada. Esto garantiza que al generar
+     * la Matutina no se tomen secciones de la Vespertina ni de Fin de Semana.
+     */
     private function cargarAsignacionesOrdenadas(
         int $idCarrera,
         int $idPeriodo,
+        int $idCarreraJornada,
     ): Collection {
         return DB::table('asignacion_docente_curso as adc')
             ->join('docente as d',   'adc.id_docente',  '=', 'd.id_docente')
             ->join('usuario as u',   'd.id_usuario',    '=', 'u.id_usuario')
             ->join('seccion as s',   'adc.id_seccion',  '=', 's.id_seccion')
             ->join('curso as c',     's.id_curso',      '=', 'c.id_curso')
+            // Filtro directo por jornada — clave de la reingeniería
+            ->where('s.id_carrera_jornada', $idCarreraJornada)
             // Solo secciones que pertenecen a la carrera (via pensum activo)
             ->whereExists(function ($sub) use ($idCarrera, $idPeriodo) {
                 $sub->select(DB::raw(1))
@@ -367,17 +382,20 @@ class GeneradorParcialService
     }
 
     /**
-     * Query B — Secciones activas SIN docente asignado.
+     * Query B — Secciones activas SIN docente asignado, filtradas por jornada.
      *
-     * Se excluyen las secciones que ya tienen asignación activa.
-     * Se incluye ciclo_semestre para informar al coordinador.
+     * REINGENIERÍA: filtra por seccion.id_carrera_jornada para no mezclar
+     * secciones de distintas jornadas de la misma carrera.
      */
     private function cargarSeccionesSinDocente(
         int $idCarrera,
         int $idPeriodo,
+        int $idCarreraJornada,
     ): Collection {
         return DB::table('seccion as s')
             ->join('curso as c', 's.id_curso', '=', 'c.id_curso')
+            // Filtro directo por jornada
+            ->where('s.id_carrera_jornada', $idCarreraJornada)
             // Solo secciones de la carrera (via pensum activo)
             ->whereExists(function ($sub) use ($idCarrera, $idPeriodo) {
                 $sub->select(DB::raw(1))
@@ -534,6 +552,7 @@ class GeneradorParcialService
                 'completitud_pct'    => 0,
                 'tiempo_ms'          => 0,
             ],
+            idCarreraJornada: $idCarreraJornada,
         );
     }
 

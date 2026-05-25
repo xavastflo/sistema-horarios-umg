@@ -109,16 +109,22 @@ class PersistenciaHorarioService
             );
         }
 
-        // 3. (C3) Rechazar si el horario ya tiene detalles activos.
-        //    Para regenerar: llamar primero a limpiarDetalles().
-        $tieneDetalles = DetalleHorario::where('id_horario', $horario->id_horario)
-            ->where('estado', 'activo')
+        // 3. (C3) Rechazar si el horario ya tiene detalles activos PARA ESTA JORNADA.
+        //    La limpieza selectiva (limpiarDetalles con idCarreraJornada) debe haberse
+        //    llamado antes. Detalles de otras jornadas son válidos y se preservan.
+        $idCarreraJornada = $resultado->idCarreraJornada();
+        $tieneDetallesJornada = DB::table('detalle_horario as dh')
+            ->join('asignacion_docente_curso as adc', 'dh.id_asignacion_docente_curso', '=', 'adc.id_asignacion_docente_curso')
+            ->join('seccion as s', 'adc.id_seccion', '=', 's.id_seccion')
+            ->where('dh.id_horario', $horario->id_horario)
+            ->where('dh.estado', 'activo')
+            ->where('s.id_carrera_jornada', $idCarreraJornada)
             ->exists();
 
-        if ($tieneDetalles) {
+        if ($tieneDetallesJornada) {
             return PersistenciaResultado::contextoInvalido(
-                'El horario ya tiene detalles activos. '
-                . 'Llame a limpiarDetalles() antes de confirmar una nueva generación.'
+                'El horario ya tiene detalles activos para esta jornada. '
+                . 'Llame a limpiarDetalles() con el id_carrera_jornada correspondiente antes de confirmar.'
             );
         }
 
@@ -143,6 +149,7 @@ class PersistenciaHorarioService
                 $periodo,
                 $idUsuario,
                 $idEstadoGenerado,
+                $idCarreraJornada,
                 &$detallesInsertados,
             ) {
                 // (C1) Recargar y bloquear el horario con SELECT FOR UPDATE.
@@ -161,21 +168,27 @@ class PersistenciaHorarioService
                     );
                 }
 
-                // Verificación definitiva de detalles activos dentro de la transacción.
-                // La prevalidación antes de la transacción no es suficiente ante
-                // concurrencia: dos procesos pueden pasar la prevalidación simultáneamente.
-                // Con el horario ya bloqueado (lockForUpdate arriba), este EXISTS
+                // Verificación definitiva de detalles PARA ESTA JORNADA dentro de la transacción.
+                // REINGENIERÍA: ya no es global por id_horario. Solo verifica la jornada
+                // que se está confirmando. Detalles de otras jornadas son válidos y se ignoran.
+                //
+                // Con el horario ya bloqueado (lockForUpdate arriba), esta query
                 // lee el estado real e impide que otro proceso inserte detalles
-                // entre la prevalidación y este punto.
-                $tieneDetallesActivos = DetalleHorario::where('id_horario', $horarioBloqueado->id_horario)
-                    ->where('estado', 'activo')
+                // de la misma jornada entre la prevalidación y este punto.
+                $tieneDetallesJornada = DB::table('detalle_horario as dh')
+                    ->join('asignacion_docente_curso as adc',
+                        'dh.id_asignacion_docente_curso', '=', 'adc.id_asignacion_docente_curso')
+                    ->join('seccion as s', 'adc.id_seccion', '=', 's.id_seccion')
+                    ->where('dh.id_horario', $horarioBloqueado->id_horario)
+                    ->where('dh.estado', 'activo')
+                    ->where('s.id_carrera_jornada', $idCarreraJornada)
                     ->lockForUpdate()
                     ->exists();
 
-                if ($tieneDetallesActivos) {
+                if ($tieneDetallesJornada) {
                     throw new \RuntimeException(
-                        'El horario ya tiene detalles activos. '
-                        . 'Llame a limpiarDetalles() antes de confirmar una nueva generación.'
+                        "El horario ya tiene detalles activos para la jornada {$idCarreraJornada}. "
+                        . 'Llame a limpiarDetalles() con este id_carrera_jornada antes de confirmar.'
                     );
                 }
 
@@ -421,8 +434,32 @@ class PersistenciaHorarioService
      * @return int     Número de detalles eliminados lógicamente
      * @throws \RuntimeException  Si el horario no es editable
      */
+    /**
+     * Elimina lógicamente los detalles activos de UN HORARIO PARA UNA JORNADA ESPECÍFICA
+     * y vuelve el horario a estado borrador solo si ya no quedan detalles activos.
+     *
+     * REINGENIERÍA: antes limpiaba todos los detalles del id_horario. Ahora
+     * solo limpia los detalles cuyas secciones pertenecen a id_carrera_jornada.
+     * Esto permite regenerar Matutina sin borrar los detalles de Vespertina.
+     *
+     * Criterio de selección de detalles a limpiar:
+     *   detalle_horario
+     *     → id_asignacion_docente_curso
+     *       → asignacion_docente_curso.id_seccion
+     *         → seccion.id_carrera_jornada = $idCarreraJornada
+     *
+     * El horario vuelve a borrador ÚNICAMENTE si ya no quedan detalles activos
+     * de ninguna jornada. Si otras jornadas tienen detalles, el estado se conserva.
+     *
+     * @param  Horario $horario           Solo para identificar el ID — se recarga con lock
+     * @param  int     $idCarreraJornada  Jornada a limpiar
+     * @param  int     $idUsuario         Usuario que ejecuta la limpieza
+     * @return int     Número de detalles eliminados lógicamente
+     * @throws \RuntimeException  Si el horario no es editable
+     */
     public function limpiarDetalles(
         Horario $horario,
+        int     $idCarreraJornada,
         int     $idUsuario,
     ): int {
 
@@ -447,7 +484,7 @@ class PersistenciaHorarioService
 
         $eliminados = 0;
 
-        DB::transaction(function () use ($horario, $idUsuario, $idEstadoBorrador, &$eliminados) {
+        DB::transaction(function () use ($horario, $idCarreraJornada, $idUsuario, $idEstadoBorrador, &$eliminados) {
 
             // (C4) Recargar y bloquear el horario dentro de la transacción
             $horarioBloqueado = Horario::where('id_horario', $horario->id_horario)
@@ -463,9 +500,18 @@ class PersistenciaHorarioService
                 );
             }
 
-            // Cargar detalles activos con lock de lectura consistente
-            $detalles = DetalleHorario::where('id_horario', $horarioBloqueado->id_horario)
-                ->where('estado', 'activo')
+            // Obtener IDs de detalles activos de esta jornada específica
+            // Cadena: detalle_horario → asignacion_docente_curso → seccion.id_carrera_jornada
+            $idsDetallesJornada = DB::table('detalle_horario as dh')
+                ->join('asignacion_docente_curso as adc', 'dh.id_asignacion_docente_curso', '=', 'adc.id_asignacion_docente_curso')
+                ->join('seccion as s',                    'adc.id_seccion',                  '=', 's.id_seccion')
+                ->where('dh.id_horario', $horarioBloqueado->id_horario)
+                ->where('dh.estado',     'activo')
+                ->where('s.id_carrera_jornada', $idCarreraJornada)
+                ->pluck('dh.id_detalle_horario');
+
+            // Cargar y limpiar solo esos detalles
+            $detalles = DetalleHorario::whereIn('id_detalle_horario', $idsDetallesJornada)
                 ->lockForUpdate()
                 ->get();
 
@@ -475,28 +521,47 @@ class PersistenciaHorarioService
                     idRegistro:    $detalle->id_detalle_horario,
                     tipoCambio:    'delete',
                     valorAnterior: $detalle->toArray(),
-                    motivo:        'Limpieza de detalles para regeneración',
+                    motivo:        "Limpieza selectiva por jornada {$idCarreraJornada} para regeneración",
                     idUsuario:     $idUsuario,
                 );
                 $detalle->update(['estado' => 'inactivo']);
                 $eliminados++;
             }
 
-            // Volver horario a borrador
+            // Verificar si quedan detalles activos de OTRAS jornadas
+            $quedanDetalles = DetalleHorario::where('id_horario', $horarioBloqueado->id_horario)
+                ->where('estado', 'activo')
+                ->exists();
+
+            // Solo volver a borrador si no queda ningún detalle activo
+            if (! $quedanDetalles) {
+                HistorialService::registrar(
+                    tabla:         'horario',
+                    idRegistro:    $horarioBloqueado->id_horario,
+                    tipoCambio:    'update',
+                    valorAnterior: ['id_estado_horario' => $horarioBloqueado->id_estado_horario],
+                    valorNuevo:    ['id_estado_horario' => $idEstadoBorrador],
+                    motivo:        'Horario vuelto a borrador para regeneración (sin detalles activos)',
+                    idUsuario:     $idUsuario,
+                );
+                $horarioBloqueado->update(['id_estado_horario' => $idEstadoBorrador]);
+                $horario->id_estado_horario = $idEstadoBorrador;
+            }
+
+            // Historial de la limpieza selectiva por jornada
             HistorialService::registrar(
-                tabla:         'horario',
-                idRegistro:    $horarioBloqueado->id_horario,
-                tipoCambio:    'update',
-                valorAnterior: ['id_estado_horario' => $horarioBloqueado->id_estado_horario],
-                valorNuevo:    ['id_estado_horario' => $idEstadoBorrador],
-                motivo:        'Horario vuelto a borrador para regeneración',
-                idUsuario:     $idUsuario,
+                tabla:      'horario',
+                idRegistro: $horarioBloqueado->id_horario,
+                tipoCambio: 'update',
+                valorNuevo: [
+                    'accion'             => 'limpieza_selectiva_jornada',
+                    'id_carrera_jornada' => $idCarreraJornada,
+                    'detalles_eliminados'=> $eliminados,
+                    'quedan_detalles'    => $quedanDetalles,
+                ],
+                motivo:    "Limpieza de {$eliminados} detalles de jornada {$idCarreraJornada} para regeneración",
+                idUsuario: $idUsuario,
             );
-
-            $horarioBloqueado->update(['id_estado_horario' => $idEstadoBorrador]);
-
-            // Propagar al modelo externo
-            $horario->id_estado_horario = $idEstadoBorrador;
         });
 
         // Notificar solo si la limpieza fue exitosa (eliminados > 0), después del commit

@@ -25,14 +25,18 @@ final class GeneracionParcialResultado
         private readonly Collection $seccionesNoAsignables,
 
         private readonly array $estadisticas,
+
+        /** Jornada para la que se generó — usado por PersistenciaHorarioService */
+        private readonly int $idCarreraJornada = 0,
     ) {}
 
     public static function crear(
         Collection $asignacionesPropuestas,
         Collection $seccionesNoAsignables,
         array      $estadisticas,
+        int        $idCarreraJornada = 0,
     ): self {
-        return new self($asignacionesPropuestas, $seccionesNoAsignables, $estadisticas);
+        return new self($asignacionesPropuestas, $seccionesNoAsignables, $estadisticas, $idCarreraJornada);
     }
 
     // ── Acceso ──────────────────────────────────────────────────
@@ -52,6 +56,12 @@ final class GeneracionParcialResultado
     public function estadisticas(): array
     {
         return $this->estadisticas;
+    }
+
+    /** Jornada para la que se generó este resultado */
+    public function idCarreraJornada(): int
+    {
+        return $this->idCarreraJornada;
     }
 
     public function totalAsignadas(): int

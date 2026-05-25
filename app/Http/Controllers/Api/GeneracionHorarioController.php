@@ -9,6 +9,7 @@ use App\Models\Horario;
 use App\Models\PeriodoAcademico;
 use App\Services\Horario\GeneradorParcialService;
 use App\Services\Horario\PersistenciaHorarioService;
+use App\Services\HistorialService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -85,25 +86,14 @@ class GeneracionHorarioController extends Controller
             ], 422);
         }
 
-        // ── 4. Verificar que haya secciones con docente asignado ──────
-        // Mismo criterio que usa GeneradorParcialService::cargarAsignacionesOrdenadas():
-        // secciones que pertenecen a la carrera via pensum activo del período.
+        // ── 4. Verificar que haya secciones con docente asignado en esta jornada ──
+        // Filtro directo por id_carrera_jornada (reingeniería estructural)
         $tieneSecciones = DB::table('asignacion_docente_curso as adc')
             ->join('seccion as s', 'adc.id_seccion', '=', 's.id_seccion')
-            ->join('curso as c',   's.id_curso',     '=', 'c.id_curso')
-            ->whereExists(function ($sub) use ($idCarrera, $idPeriodo) {
-                $sub->select(DB::raw(1))
-                    ->from('pensum_curso as pc')
-                    ->join('pensum as p', 'pc.id_pensum', '=', 'p.id_pensum')
-                    ->whereColumn('pc.id_curso', 's.id_curso')
-                    ->where('p.id_carrera', $idCarrera)
-                    ->where('p.id_periodo_academico', $idPeriodo)
-                    ->where('p.estado', 'activo')
-                    ->where('pc.estado', 'activo');
-            })
+            ->where('s.id_carrera_jornada',   $idCarreraJornada)
             ->where('s.id_periodo_academico', $idPeriodo)
             ->where('adc.estado', 'activo')
-            ->where('s.estado', 'activo')
+            ->where('s.estado',   'activo')
             ->exists();
 
         if (! $tieneSecciones) {
@@ -136,15 +126,22 @@ class GeneracionHorarioController extends Controller
             ]
         );
 
-        // ── 6. Si ya tiene detalles activos → limpiar (regeneración) ──
-        $tieneDetalles = DB::table('detalle_horario')
-            ->where('id_horario', $horario->id_horario)
-            ->where('estado', 'activo')
+        // ── 6. Si ya tiene detalles activos para ESTA JORNADA → limpiar (regeneración selectiva)
+        $tieneDetallesJornada = DB::table('detalle_horario as dh')
+            ->join('asignacion_docente_curso as adc', 'dh.id_asignacion_docente_curso', '=', 'adc.id_asignacion_docente_curso')
+            ->join('seccion as s', 'adc.id_seccion', '=', 's.id_seccion')
+            ->where('dh.id_horario', $horario->id_horario)
+            ->where('dh.estado', 'activo')
+            ->where('s.id_carrera_jornada', $idCarreraJornada)
             ->exists();
 
-        if ($tieneDetalles) {
+        if ($tieneDetallesJornada) {
             try {
-                $borrados = $this->persistencia->limpiarDetalles($horario, $request->user()->id_usuario);
+                $borrados = $this->persistencia->limpiarDetalles(
+                    horario:          $horario,
+                    idCarreraJornada: $idCarreraJornada,
+                    idUsuario:        $request->user()->id_usuario,
+                );
             } catch (\RuntimeException $e) {
                 return response()->json([
                     'message' => 'No se puede regenerar: ' . $e->getMessage(),
@@ -186,7 +183,26 @@ class GeneracionHorarioController extends Controller
             ], 422);
         }
 
-        // ── 9. Respuesta final ─────────────────────────────────────────
+        // ── 9. Registrar evento de generación en historial ─────────────
+        HistorialService::registrar(
+            tabla:      'horario',
+            idRegistro: $horario->id_horario,
+            tipoCambio: 'update',
+            valorNuevo: [
+                'accion'               => 'generacion_automatica',
+                'id_carrera'           => $idCarrera,
+                'id_carrera_jornada'   => $idCarreraJornada,
+                'id_periodo_academico' => $idPeriodo,
+                'asignadas'            => $resultado->totalAsignadas(),
+                'no_asignadas'         => $resultado->totalNoAsignadas(),
+                'detalles_insertados'  => $persistido->detallesInsertados,
+            ],
+            motivo:    "Generación automática por jornada {$idCarreraJornada}: "
+                     . "{$persistido->detallesInsertados} detalles insertados.",
+            idUsuario: $request->user()->id_usuario,
+        );
+
+        // ── 10. Respuesta final ────────────────────────────────────────
         $horario->refresh();
         $horario->load(['carrera', 'periodoAcademico', 'estadoHorario']);
 
