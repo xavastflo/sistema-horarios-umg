@@ -41,6 +41,11 @@ class Curso extends Model
         return $this->hasMany(Seccion::class, 'id_curso', 'id_curso');
     }
 
+    public function pensumCursos(): HasMany
+    {
+        return $this->hasMany(\App\Models\PensumCurso::class, 'id_curso', 'id_curso');
+    }
+
     // ── Scopes ───────────────────────────────────────────────
     public function scopeActivos($query)
     {

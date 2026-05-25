@@ -123,6 +123,9 @@ class AuthController extends Controller
     /**
      * GET /api/auth/pregunta-seguridad/{nombre_usuario}
      * Devuelve la pregunta de seguridad para el proceso de recuperación.
+     *
+     * Seguridad: el mensaje de error es genérico para evitar enumeración
+     * de usuarios (user enumeration attack).
      */
     public function preguntaSeguridad(string $nombreUsuario): JsonResponse
     {
@@ -130,9 +133,10 @@ class AuthController extends Controller
             ->where('estado', 'activo')
             ->first();
 
+        // Mensaje genérico: no revelar si el usuario existe o no
         if (! $usuario || ! $usuario->pregunta_seguridad) {
             return response()->json([
-                'message' => 'Usuario no encontrado o sin pregunta de seguridad configurada.',
+                'message' => 'No se pudo procesar la solicitud con los datos proporcionados.',
             ], 404);
         }
 
@@ -144,6 +148,10 @@ class AuthController extends Controller
     /**
      * POST /api/auth/recuperar-password
      * Valida respuesta de seguridad y cambia la contraseña.
+     *
+     * Seguridad:
+     *   - Mensajes de error genéricos para evitar enumeración de usuarios.
+     *   - Tokens revocados tras el cambio para invalidar sesiones previas.
      */
     public function recuperarPassword(RecuperarPasswordRequest $request): JsonResponse
     {
@@ -151,14 +159,17 @@ class AuthController extends Controller
             ->where('estado', 'activo')
             ->first();
 
+        // Mensaje genérico: no revelar si el usuario existe o no
         if (! $usuario) {
-            return response()->json(['message' => 'Usuario no encontrado.'], 404);
+            return response()->json([
+                'message' => 'No se pudo procesar la solicitud con los datos proporcionados.',
+            ], 404);
         }
 
         if (! $usuario->respuesta_seguridad_hash ||
             ! Hash::check($request->respuesta, $usuario->respuesta_seguridad_hash)) {
             return response()->json([
-                'message' => 'La respuesta de seguridad no es correcta.',
+                'message' => 'No se pudo procesar la solicitud con los datos proporcionados.',
             ], 422);
         }
 
@@ -166,6 +177,9 @@ class AuthController extends Controller
 
         $usuario->password_hash = Hash::make($request->nueva_password);
         $usuario->save();
+
+        // Revocar todos los tokens activos: invalida sesiones abiertas con la clave anterior
+        $usuario->tokens()->delete();
 
         HistorialService::registrar(
             tabla:         'usuario',
@@ -182,7 +196,46 @@ class AuthController extends Controller
         ]);
     }
 
-    // ── Helpers ──────────────────────────────────────────────
+    /**
+     * POST /api/auth/cambiar-password
+     *
+     * Permite al usuario autenticado cambiar su propia contraseña.
+     * Requiere la contraseña actual para confirmar identidad.
+     *
+     * Seguridad:
+     *   - Regla 'current_password' valida contra getAuthPassword() → password_hash.
+     *   - Tokens revocados tras el cambio: fuerza relogueo en todos los dispositivos.
+     */
+    public function cambiarPassword(Request $request): JsonResponse
+    {
+        $request->validate([
+            'password_actual' => ['required', 'current_password'],
+            'password'        => ['required', 'string', 'min:8', 'confirmed'],
+        ], [
+            'password_actual.required'         => 'La contraseña actual es obligatoria.',
+            'password_actual.current_password' => 'La contraseña actual no es correcta.',
+            'password.required'                => 'La nueva contraseña es obligatoria.',
+            'password.min'                     => 'La nueva contraseña debe tener al menos 8 caracteres.',
+            'password.confirmed'               => 'La confirmación de la nueva contraseña no coincide.',
+        ]);
+
+        /** @var \App\Models\Usuario $usuario */
+        $usuario = $request->user();
+
+        // Columna real en BD es 'password_hash', no 'password'
+        $usuario->password_hash = Hash::make($request->password);
+        $usuario->save();
+
+        // Revocar todos los tokens activos → fuerza relogueo seguro
+        $usuario->tokens()->delete();
+
+        return response()->json([
+            'message' => 'Contraseña actualizada correctamente. Vuelve a iniciar sesión.',
+        ]);
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
     private function formatUsuario(Usuario $usuario): array
     {
         return [

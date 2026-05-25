@@ -11,10 +11,10 @@ class Seccion extends Model
     protected $table      = 'seccion';
     protected $primaryKey = 'id_seccion';
     public    $timestamps = false;
-
-    protected $keyType = 'int';
+    protected $keyType    = 'int';
 
     protected $fillable = [
+        'id_carrera_jornada',   // nueva FK obligatoria
         'id_curso',
         'id_periodo_academico',
         'numero_seccion',
@@ -27,6 +27,13 @@ class Seccion extends Model
     ];
 
     // ── Relaciones ──────────────────────────────────────────
+
+    /** Nueva: jornada a la que pertenece la sección */
+    public function carreraJornada(): BelongsTo
+    {
+        return $this->belongsTo(CarreraJornada::class, 'id_carrera_jornada', 'id_carrera_jornada');
+    }
+
     public function curso(): BelongsTo
     {
         return $this->belongsTo(Curso::class, 'id_curso', 'id_curso');
@@ -66,5 +73,10 @@ class Seccion extends Model
     public function scopePorPeriodo($query, int $idPeriodo)
     {
         return $query->where('id_periodo_academico', $idPeriodo);
+    }
+
+    public function scopePorJornada($query, int $idCarreraJornada)
+    {
+        return $query->where('id_carrera_jornada', $idCarreraJornada);
     }
 }

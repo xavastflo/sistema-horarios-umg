@@ -18,19 +18,29 @@ class SeccionController extends Controller
 {
     /**
      * GET /api/secciones
-     * Filtros: id_curso, id_periodo_academico, estado
+     * Filtros directos: id_carrera_jornada, id_curso, id_periodo_academico, estado
+     *
+     * Tras la reingeniería, el filtro por jornada es un simple WHERE directo
+     * (ya no requiere un whereHas con 4 joins derivados).
      */
     public function index(Request $request): JsonResponse
     {
         $query = Seccion::with([
+            'carreraJornada.jornada',
+            'carreraJornada.carrera',
             'curso',
             'periodoAcademico',
             'asignacionActiva.docente.usuario',
         ])
-        ->when($request->id_curso, fn($q) => $q->where('id_curso', $request->id_curso))
-        ->when($request->id_periodo_academico, fn($q) => $q->where('id_periodo_academico', $request->id_periodo_academico))
-        ->when($request->estado, fn($q) => $q->where('estado', $request->estado))
-        ->orderBy('id_curso')
+        ->when($request->id_carrera_jornada, fn($q) =>
+            $q->where('id_carrera_jornada', $request->id_carrera_jornada))
+        ->when($request->id_curso, fn($q) =>
+            $q->where('id_curso', $request->id_curso))
+        ->when($request->id_periodo_academico, fn($q) =>
+            $q->where('id_periodo_academico', $request->id_periodo_academico))
+        ->when($request->estado, fn($q) =>
+            $q->where('estado', $request->estado))
+        ->orderBy('id_carrera_jornada')
         ->orderBy('numero_seccion');
 
         return response()->json($query->get());
@@ -38,35 +48,45 @@ class SeccionController extends Controller
 
     /**
      * POST /api/secciones
-     * REGLA: No se puede repetir la misma sección (curso + período + número).
+     * Requiere: id_carrera_jornada, id_curso, id_periodo_academico, numero_seccion
+     *
+     * Unicidad: (id_carrera_jornada + id_curso + id_periodo + numero_seccion)
+     * → Sección A puede existir en Matutina Y en Vespertina para el mismo curso.
+     * → No puede existir dos veces en la misma jornada.
      */
     public function store(StoreSeccionRequest $request): JsonResponse
     {
-        // Verificar unicidad con mensaje amigable
-        $existe = Seccion::where('id_curso', $request->id_curso)
-            ->where('id_periodo_academico', $request->id_periodo_academico)
-            ->where('numero_seccion', $request->numero_seccion)
+        // La unicidad ya la valida StoreSeccionRequest con Rule::unique compuesto.
+        // Esta verificación adicional produce un mensaje de error más amigable.
+        $existe = Seccion::where('id_carrera_jornada',  $request->id_carrera_jornada)
+            ->where('id_curso',              $request->id_curso)
+            ->where('id_periodo_academico',  $request->id_periodo_academico)
+            ->where('numero_seccion',        strtoupper($request->numero_seccion))
             ->exists();
 
         if ($existe) {
             return response()->json([
-                'message' => 'Ya existe una sección con ese número para este curso y período.',
-                'errors'  => ['numero_seccion' => ['Sección duplicada.']],
+                'message' => 'Ya existe esa sección para este curso, período y jornada.',
+                'errors'  => ['numero_seccion' => ['Sección duplicada en esta jornada.']],
             ], 422);
         }
 
         $seccion = Seccion::create([
-            'id_curso'             => $request->id_curso,
-            'id_periodo_academico' => $request->id_periodo_academico,
-            'numero_seccion'       => strtoupper($request->numero_seccion),
-            'estado'               => 'activo',
-            'fecha_creacion'       => now(),
-            'fecha_actualizacion'  => now(),
+            'id_carrera_jornada'  => $request->id_carrera_jornada,
+            'id_curso'            => $request->id_curso,
+            'id_periodo_academico'=> $request->id_periodo_academico,
+            'numero_seccion'      => strtoupper($request->numero_seccion),
+            'estado'              => 'activo',
+            'fecha_creacion'      => now(),
+            'fecha_actualizacion' => now(),
         ]);
 
         HistorialService::registrarCreacion($seccion, 'seccion');
 
-        return response()->json($seccion->load(['curso', 'periodoAcademico']), 201);
+        return response()->json(
+            $seccion->load(['carreraJornada.jornada', 'curso', 'periodoAcademico']),
+            201
+        );
     }
 
     /**
