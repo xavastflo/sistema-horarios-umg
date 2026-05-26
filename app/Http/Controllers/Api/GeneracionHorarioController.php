@@ -162,9 +162,10 @@ class GeneracionHorarioController extends Controller
         // Si el generador devuelve 0 propuestas, no hay nada que persistir
         if ($resultado->asignacionesPropuestas()->isEmpty()) {
             return response()->json([
-                'message'      => 'El generador no produjo asignaciones. Verifique bloques, disponibilidad y secciones.',
-                'no_asignadas' => $resultado->seccionesNoAsignables()->map->toArray()->values(),
-                'resumen'      => $resultado->estadisticas(),
+                'message'          => 'El generador no produjo asignaciones. Verifique bloques, disponibilidad y secciones.',
+                'secciones_sin_bloque' => $resultado->seccionesNoAsignables()->map->toArray()->values(),
+                'secciones_parciales'  => $resultado->seccionesParciales()->map->toArray()->values(),
+                'estadisticas'     => $resultado->estadisticas(),
             ], 422);
         }
 
@@ -189,16 +190,17 @@ class GeneracionHorarioController extends Controller
             idRegistro: $horario->id_horario,
             tipoCambio: 'update',
             valorNuevo: [
-                'accion'               => 'generacion_automatica',
-                'id_carrera'           => $idCarrera,
-                'id_carrera_jornada'   => $idCarreraJornada,
-                'id_periodo_academico' => $idPeriodo,
-                'asignadas'            => $resultado->totalAsignadas(),
-                'no_asignadas'         => $resultado->totalNoAsignadas(),
-                'detalles_insertados'  => $persistido->detallesInsertados,
+                'accion'                    => 'generacion_automatica',
+                'id_carrera'                => $idCarrera,
+                'id_carrera_jornada'        => $idCarreraJornada,
+                'id_periodo_academico'      => $idPeriodo,
+                'bloques_asignados'         => $resultado->totalAsignadas(),
+                'secciones_sin_bloque'      => $resultado->totalNoAsignadas(),
+                'secciones_parciales'       => $resultado->totalParciales(),
+                'detalles_insertados'       => $persistido->detallesInsertados,
             ],
-            motivo:    "Generación automática por jornada {$idCarreraJornada}: "
-                     . "{$persistido->detallesInsertados} detalles insertados.",
+            motivo:    "Generación automática jornada {$idCarreraJornada}: "
+                     . "{$persistido->detallesInsertados} bloques insertados.",
             idUsuario: $request->user()->id_usuario,
         );
 
@@ -216,12 +218,9 @@ class GeneracionHorarioController extends Controller
                 'carrera'              => $horario->carrera?->only(['id_carrera', 'nombre_carrera', 'codigo_carrera']),
                 'periodo_academico'    => $horario->periodoAcademico?->only(['id_periodo_academico', 'nombre_periodo', 'anio']),
             ],
-            'resumen' => [
-                'asignadas'          => $resultado->totalAsignadas(),
-                'no_asignadas'       => $resultado->totalNoAsignadas(),
-                'detalles_insertados'=> $persistido->detallesInsertados,
-            ],
-            'no_asignadas' => $resultado->seccionesNoAsignables()->map->toArray()->values(),
+            'estadisticas'         => $resultado->estadisticas(),
+            'secciones_parciales'  => $resultado->seccionesParciales()->map->toArray()->values(),
+            'secciones_sin_bloque' => $resultado->seccionesNoAsignables()->map->toArray()->values(),
         ]);
     }
 }

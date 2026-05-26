@@ -54,7 +54,18 @@ class CarreraController extends Controller
     public function show(int $id): JsonResponse
     {
         $carrera = Carrera::with(['facultad', 'coordinador', 'jornadasActivas'])->findOrFail($id);
-        return response()->json($carrera);
+
+        // Aplanar id_carrera_jornada del pivot a la raíz de cada jornada.
+        // El frontend usa j.id_carrera_jornada como value en el select de secciones.
+        $carreraArray                  = $carrera->toArray();
+        $carreraArray['jornadas_activas'] = collect($carreraArray['jornadas_activas'])
+            ->map(fn($j) => array_merge($j, [
+                'id_carrera_jornada' => $j['pivot']['id_carrera_jornada'] ?? null,
+            ]))
+            ->values()
+            ->all();
+
+        return response()->json($carreraArray);
     }
 
     /**

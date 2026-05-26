@@ -134,118 +134,172 @@ class GeneradorParcialService
         $franjasOcupadasPorCiclo = [];
 
         // ── Procesamiento ───────────────────────────────────────
-        $propuestas    = collect();
-        $noAsignables  = collect();
-        $inicioTiempo  = microtime(true);
+        $propuestas     = collect();   // todos los bloques asignados (completos + parciales)
+        $noAsignables   = collect();   // secciones con 0 bloques
+        $parciales      = collect();   // secciones con 1..N-1 bloques (metadato)
+        $inicioTiempo   = microtime(true);
 
         foreach ($asignaciones as $asignacion) {
 
-            // Obtener candidatos válidos (lee BD — no ve propuestas en memoria)
-            $candidatos = $this->candidatoService->obtenerCandidatos(
-                idDocente:        $asignacion->id_docente,
-                idSeccion:        $asignacion->id_seccion,
-                idHorario:        $horario->id_horario,
-                idCarreraJornada: $idCarreraJornada,
-                periodo:          $periodo,
-                horario:          $horario,
-            );
+            $bloquesRequeridos = max(1, (int) ($asignacion->bloques_semanales ?? 1));
+            $bloquesAsignados  = 0;
 
-            // Fallo irrecuperable del servicio (fecha o estado) → detener
-            $motGlobal = $candidatos->contexto()['motivo_global'] ?? null;
-            if ($motGlobal && in_array($motGlobal, ['fecha_limite_vencida', 'horario_no_editable'], true)) {
-                break;
-            }
+            // Días ya usados por este sección en el inner-loop.
+            // Permite preferencia de días distintos (soft filter).
+            $diasUsadosPorSeccion = [];
 
-            // Filtrar candidatos contra el estado en memoria usando traslape real
-            $cicloSeccion = (int) ($asignacion->ciclo_semestre ?? 0);
+            // Último candidatos-resultado del inner-loop (para diagnóstico)
+            $ultimosCandidatos = null;
 
-            $candidatosDisponibles = $candidatos->bloquesValidos()->filter(
-                function ($bloque) use (
-                    $asignacion,
-                    $cicloSeccion,
-                    $franjasOcupadasEnHorario,
-                    $franjasOcupadasPorDocente,
-                    $franjasOcupadasPorCiclo,
-                ) {
-                    $idDia      = (int) $bloque->id_dia;
-                    $horaInicio = $bloque->hora_inicio;
-                    $horaFin    = $bloque->hora_fin;
+            for ($numBloque = 1; $numBloque <= $bloquesRequeridos; $numBloque++) {
 
-                    // Filtro A: franja ya ocupada en el horario (cualquier sección)
-                    if ($this->traslapaConFranjas($franjasOcupadasEnHorario, $idDia, $horaInicio, $horaFin)) {
-                        return false;
-                    }
+                // Re-invocar por cada bloque: el Filtro 4 del BloqueCandidatoService
+                // (cargarBloquesOcupadosEnHorario) ve los propuestas ya elegidas
+                // en iteraciones anteriores del mismo inner-loop.
+                $candidatos = $this->candidatoService->obtenerCandidatos(
+                    idDocente:        $asignacion->id_docente,
+                    idSeccion:        $asignacion->id_seccion,
+                    idHorario:        $horario->id_horario,
+                    idCarreraJornada: $idCarreraJornada,
+                    periodo:          $periodo,
+                    horario:          $horario,
+                );
 
-                    // Filtro B: docente ya tiene propuesta en esta franja
-                    $franjasDocente = $franjasOcupadasPorDocente[$asignacion->id_docente] ?? collect();
-                    if ($this->traslapaConFranjas($franjasDocente, $idDia, $horaInicio, $horaFin)) {
-                        return false;
-                    }
+                $ultimosCandidatos = $candidatos;
 
-                    // Filtro C: ciclo ya tiene propuesta en esta franja
-                    if ($cicloSeccion > 0) {
-                        $franjasDelCiclo = $franjasOcupadasPorCiclo[$cicloSeccion] ?? collect();
-                        if ($this->traslapaConFranjas($franjasDelCiclo, $idDia, $horaInicio, $horaFin)) {
+                // Fallo irrecuperable del contexto → detener generación completa
+                $motGlobal = $candidatos->contexto()['motivo_global'] ?? null;
+                if ($motGlobal && in_array($motGlobal, ['fecha_limite_vencida', 'horario_no_editable'], true)) {
+                    break 2;
+                }
+
+                $cicloSeccion = (int) ($asignacion->ciclo_semestre ?? 0);
+
+                // ── Filtro de memoria global (A, B, C — igual que antes) ───
+                $candidatosFiltradosGlobal = $candidatos->bloquesValidos()->filter(
+                    function ($bloque) use (
+                        $asignacion,
+                        $cicloSeccion,
+                        $franjasOcupadasEnHorario,
+                        $franjasOcupadasPorDocente,
+                        $franjasOcupadasPorCiclo,
+                    ) {
+                        $idDia = (int) $bloque->id_dia;
+                        $hi    = $bloque->hora_inicio;
+                        $hf    = $bloque->hora_fin;
+
+                        if ($this->traslapaConFranjas($franjasOcupadasEnHorario, $idDia, $hi, $hf)) {
                             return false;
                         }
+                        $franjasDocente = $franjasOcupadasPorDocente[$asignacion->id_docente] ?? collect();
+                        if ($this->traslapaConFranjas($franjasDocente, $idDia, $hi, $hf)) {
+                            return false;
+                        }
+                        if ($cicloSeccion > 0) {
+                            $franjasDelCiclo = $franjasOcupadasPorCiclo[$cicloSeccion] ?? collect();
+                            if ($this->traslapaConFranjas($franjasDelCiclo, $idDia, $hi, $hf)) {
+                                return false;
+                            }
+                        }
+                        return true;
                     }
+                );
 
-                    return true;
+                // ── Pasada 1: preferencia de días distintos (soft filter) ──
+                if ($bloquesRequeridos > 1 && ! empty($diasUsadosPorSeccion)) {
+                    $candidatosDiaDistinto = $candidatosFiltradosGlobal->filter(
+                        fn($b) => ! in_array((int) $b->id_dia, $diasUsadosPorSeccion, true)
+                    );
+                } else {
+                    $candidatosDiaDistinto = $candidatosFiltradosGlobal;
                 }
-            );
 
-            if ($candidatosDisponibles->isEmpty()) {
-                $noAsignables->push($this->construirSeccionNoAsignable(
-                    asignacion:               $asignacion,
-                    candidatos:               $candidatos,
-                    franjasOcupadasEnHorario: $franjasOcupadasEnHorario,
-                    franjasOcupadasPorDocente: $franjasOcupadasPorDocente,
-                    franjasOcupadasPorCiclo:  $franjasOcupadasPorCiclo,
-                    cicloSeccion:             $cicloSeccion,
+                // ── Pasada 2: si la preferencia de día distinto falla, relajar ──
+                $candidatosDisponibles = $candidatosDiaDistinto->isNotEmpty()
+                    ? $candidatosDiaDistinto
+                    : $candidatosFiltradosGlobal;
+
+                if ($candidatosDisponibles->isEmpty()) {
+                    // No hay más bloques posibles para esta sección
+                    break;
+                }
+
+                // Elegir el primer bloque del conjunto filtrado (día ASC, hora ASC)
+                $bloqueElegido = $candidatosDisponibles->first();
+
+                $franja = [
+                    'id_dia'      => (int) $bloqueElegido->id_dia,
+                    'hora_inicio' => $bloqueElegido->hora_inicio,
+                    'hora_fin'    => $bloqueElegido->hora_fin,
+                ];
+
+                // ── Actualizar estado en memoria inmediatamente ────────────
+                $franjasOcupadasEnHorario->push($franja);
+
+                if (! isset($franjasOcupadasPorDocente[$asignacion->id_docente])) {
+                    $franjasOcupadasPorDocente[$asignacion->id_docente] = collect();
+                }
+                $franjasOcupadasPorDocente[$asignacion->id_docente]->push($franja);
+
+                if ($cicloSeccion > 0) {
+                    if (! isset($franjasOcupadasPorCiclo[$cicloSeccion])) {
+                        $franjasOcupadasPorCiclo[$cicloSeccion] = collect();
+                    }
+                    $franjasOcupadasPorCiclo[$cicloSeccion]->push($franja);
+                }
+
+                $diasUsadosPorSeccion[] = (int) $bloqueElegido->id_dia;
+
+                // ── Registrar propuesta (incluye posición y total) ─────────
+                $propuestas->push(new AsignacionPropuesta(
+                    idAsignacionDocenteCurso: $asignacion->id_asignacion_docente_curso,
+                    idSeccion:                $asignacion->id_seccion,
+                    idDocente:                $asignacion->id_docente,
+                    idBloque:                 $bloqueElegido->id_bloque_horario,
+                    idDia:                    (int) $bloqueElegido->id_dia,
+                    horaInicio:               $bloqueElegido->hora_inicio,
+                    horaFin:                  $bloqueElegido->hora_fin,
+                    nombreDia:                $bloqueElegido->getAttribute('nombre_dia') ?? '',
+                    nombreCurso:              $asignacion->nombre_curso,
+                    nombreDocente:            $asignacion->nombre_docente,
+                    cicloSemestre:            $cicloSeccion,
+                    prioridadDocente:         (int) $asignacion->prioridad,
+                    numBloque:                $numBloque,
+                    bloquesRequeridos:        $bloquesRequeridos,
                 ));
-                continue;
+
+                $bloquesAsignados++;
+            } // fin inner-loop
+
+            // ── Clasificar resultado de la sección ────────────────────────
+            if ($bloquesAsignados === 0) {
+                // Sin ningún bloque — diagnosticar causa
+                $noAsignables->push($this->construirSeccionNoAsignable(
+                    asignacion:                $asignacion,
+                    candidatos:                $ultimosCandidatos,
+                    franjasOcupadasEnHorario:  $franjasOcupadasEnHorario,
+                    franjasOcupadasPorDocente: $franjasOcupadasPorDocente,
+                    franjasOcupadasPorCiclo:   $franjasOcupadasPorCiclo,
+                    cicloSeccion:              (int) ($asignacion->ciclo_semestre ?? 0),
+                    bloquesAsignados:          0,
+                    bloquesRequeridos:         $bloquesRequeridos,
+                ));
+            } elseif ($bloquesAsignados < $bloquesRequeridos) {
+                // Parcial — sus bloques YA están en $propuestas y se persistirán
+                $parciales->push(new SeccionNoAsignable(
+                    idSeccion:         $asignacion->id_seccion,
+                    nombreCurso:       $asignacion->nombre_curso,
+                    numeroSeccion:     $asignacion->numero_seccion,
+                    cicloSemestre:     (int) ($asignacion->ciclo_semestre ?? 0),
+                    razon:             SeccionNoAsignable::ASIGNACION_PARCIAL,
+                    mensaje:           "Se asignaron {$bloquesAsignados}/{$bloquesRequeridos} bloques. "
+                                       . 'No se encontraron bloques disponibles para los bloques restantes.',
+                    bloquesAsignados:  $bloquesAsignados,
+                    bloquesRequeridos: $bloquesRequeridos,
+                    bloquesDescartados: [],
+                ));
             }
-
-            // Tomar el primer bloque (día ASC, hora ASC — orden del servicio)
-            $bloqueElegido = $candidatosDisponibles->first();
-
-            // Construir franja para el estado en memoria
-            $franja = [
-                'id_dia'      => (int) $bloqueElegido->id_dia,
-                'hora_inicio' => $bloqueElegido->hora_inicio,
-                'hora_fin'    => $bloqueElegido->hora_fin,
-            ];
-
-            // Actualizar estado en memoria
-            $franjasOcupadasEnHorario->push($franja);
-
-            if (! isset($franjasOcupadasPorDocente[$asignacion->id_docente])) {
-                $franjasOcupadasPorDocente[$asignacion->id_docente] = collect();
-            }
-            $franjasOcupadasPorDocente[$asignacion->id_docente]->push($franja);
-
-            if ($cicloSeccion > 0) {
-                if (! isset($franjasOcupadasPorCiclo[$cicloSeccion])) {
-                    $franjasOcupadasPorCiclo[$cicloSeccion] = collect();
-                }
-                $franjasOcupadasPorCiclo[$cicloSeccion]->push($franja);
-            }
-
-            // Registrar propuesta
-            $propuestas->push(new AsignacionPropuesta(
-                idAsignacionDocenteCurso: $asignacion->id_asignacion_docente_curso,
-                idSeccion:                $asignacion->id_seccion,
-                idDocente:                $asignacion->id_docente,
-                idBloque:                 $bloqueElegido->id_bloque_horario,
-                idDia:                    (int) $bloqueElegido->id_dia,
-                horaInicio:               $bloqueElegido->hora_inicio,
-                horaFin:                  $bloqueElegido->hora_fin,
-                nombreDia:                $bloqueElegido->getAttribute('nombre_dia') ?? '',
-                nombreCurso:              $asignacion->nombre_curso,
-                nombreDocente:            $asignacion->nombre_docente,
-                cicloSemestre:            $cicloSeccion,
-                prioridadDocente:         (int) $asignacion->prioridad,
-            ));
+            // Si $bloquesAsignados === $bloquesRequeridos → completo, solo en $propuestas
         }
 
         // Agregar secciones sin docente al resultado de no-asignables
@@ -257,22 +311,30 @@ class GeneradorParcialService
                 cicloSemestre:     (int) ($seccion->ciclo_semestre ?? 0),
                 razon:             SeccionNoAsignable::SIN_ASIGNACION_DOCENTE,
                 mensaje:           'La sección no tiene docente asignado. Asigne un docente antes de generar el horario.',
+                bloquesAsignados:  0,
+                bloquesRequeridos: max(1, (int) ($seccion->bloques_semanales ?? 1)),
                 bloquesDescartados: [],
             ));
         }
 
         $tiempoMs = round((microtime(true) - $inicioTiempo) * 1000, 2);
 
-        $totalEvaluadas = $asignaciones->count() + $seccionesSinDocente->count();
+        $totalSeccionesEvaluadas = $asignaciones->count() + $seccionesSinDocente->count();
+        $totalBloquesRequeridos  = $asignaciones->sum(fn($a) => max(1, (int) ($a->bloques_semanales ?? 1)))
+                                 + $seccionesSinDocente->sum(fn($s) => max(1, (int) ($s->bloques_semanales ?? 1)));
+        $totalBloquesAsignados   = $propuestas->count();
 
         return GeneracionParcialResultado::crear(
             asignacionesPropuestas: $propuestas,
             seccionesNoAsignables:  $noAsignables,
+            seccionesParciales:     $parciales,
             estadisticas: $this->estadisticas(
                 $horario, $periodo, $idCarreraJornada,
-                $totalEvaluadas,
-                $propuestas->count(),
+                $totalSeccionesEvaluadas,
+                $totalBloquesRequeridos,
+                $totalBloquesAsignados,
                 $noAsignables->count(),
+                $parciales->count(),
                 $tiempoMs,
             ),
             idCarreraJornada: $idCarreraJornada,
@@ -377,6 +439,7 @@ class GeneradorParcialService
                 DB::raw("CONCAT(u.nombres, ' ', u.apellidos) as nombre_docente"),
                 'd.prioridad',
                 'pc2.ciclo_semestre',
+                DB::raw('COALESCE(pc2.bloques_semanales, 1) as bloques_semanales'),
             ])
             ->get();
     }
@@ -454,12 +517,28 @@ class GeneradorParcialService
      */
     private function construirSeccionNoAsignable(
         object                   $asignacion,
-        BloqueCandidatoResultado $candidatos,
+        ?BloqueCandidatoResultado $candidatos,
         Collection               $franjasOcupadasEnHorario,
         array                    $franjasOcupadasPorDocente,
         array                    $franjasOcupadasPorCiclo,
         int                      $cicloSeccion,
+        int                      $bloquesAsignados  = 0,
+        int                      $bloquesRequeridos = 1,
     ): SeccionNoAsignable {
+
+        // Sin resultado de candidatos (no se llegó a invocar)
+        if ($candidatos === null) {
+            return new SeccionNoAsignable(
+                idSeccion:          $asignacion->id_seccion,
+                nombreCurso:        $asignacion->nombre_curso,
+                numeroSeccion:      $asignacion->numero_seccion,
+                cicloSemestre:      $cicloSeccion,
+                razon:              SeccionNoAsignable::SIN_CANDIDATOS,
+                mensaje:            'No se pudo evaluar la sección.',
+                bloquesAsignados:   $bloquesAsignados,
+                bloquesRequeridos:  $bloquesRequeridos,
+            );
+        }
 
         // C3: sin bloques definidos
         $contexto = $candidatos->contexto();
@@ -471,6 +550,8 @@ class GeneradorParcialService
                 cicloSemestre:      $cicloSeccion,
                 razon:              SeccionNoAsignable::SIN_BLOQUES_DEFINIDOS,
                 mensaje:            'No existen bloques horarios definidos para esta carrera-jornada.',
+                bloquesAsignados:   $bloquesAsignados,
+                bloquesRequeridos:  $bloquesRequeridos,
                 bloquesDescartados: [],
             );
         }
@@ -478,8 +559,7 @@ class GeneradorParcialService
         // Si hay candidatos válidos en BD, determinar qué filtro de memoria los bloqueó
         $validosEnBD = $candidatos->bloquesValidos();
         if ($validosEnBD->isNotEmpty()) {
-            // Identificar qué filtro rechazó todos los candidatos válidos
-            $franjasDocente = $franjasOcupadasPorDocente[$asignacion->id_docente] ?? collect();
+            $franjasDocente  = $franjasOcupadasPorDocente[$asignacion->id_docente] ?? collect();
             $franjasDelCiclo = $cicloSeccion > 0
                 ? ($franjasOcupadasPorCiclo[$cicloSeccion] ?? collect())
                 : collect();
@@ -508,6 +588,8 @@ class GeneradorParcialService
                 cicloSemestre:      $cicloSeccion,
                 razon:              SeccionNoAsignable::SIN_CANDIDATOS,
                 mensaje:            'Los bloques válidos están ocupados por otras asignaciones de esta misma generación.',
+                bloquesAsignados:   $bloquesAsignados,
+                bloquesRequeridos:  $bloquesRequeridos,
                 bloquesDescartados: array_map(fn($m) => ['motivo_memoria' => $m], $motivosMemoria),
             );
         }
@@ -520,6 +602,8 @@ class GeneradorParcialService
             cicloSemestre:      $cicloSeccion,
             razon:              SeccionNoAsignable::SIN_CANDIDATOS,
             mensaje:            'No existe ningún bloque disponible que cumpla todas las restricciones.',
+            bloquesAsignados:   $bloquesAsignados,
+            bloquesRequeridos:  $bloquesRequeridos,
             bloquesDescartados: $candidatos->bloquesDescartados()
                 ->map(fn($d) => $d->toArray())
                 ->values()
@@ -539,18 +623,22 @@ class GeneradorParcialService
         return GeneracionParcialResultado::crear(
             asignacionesPropuestas: collect(),
             seccionesNoAsignables:  collect(),
+            seccionesParciales:     collect(),
             estadisticas: [
-                'id_horario'         => $horario->id_horario,
-                'id_carrera'         => $horario->id_carrera,
-                'id_periodo'         => $periodo->id_periodo_academico,
-                'id_carrera_jornada' => $idCarreraJornada,
-                'razon_global'       => $razon,
-                'mensaje_global'     => $mensaje,
-                'total_evaluadas'    => 0,
-                'total_asignadas'    => 0,
-                'total_no_asignadas' => 0,
-                'completitud_pct'    => 0,
-                'tiempo_ms'          => 0,
+                'id_horario'                 => $horario->id_horario,
+                'id_carrera'                 => $horario->id_carrera,
+                'id_periodo'                 => $periodo->id_periodo_academico,
+                'id_carrera_jornada'         => $idCarreraJornada,
+                'razon_global'               => $razon,
+                'mensaje_global'             => $mensaje,
+                'total_secciones_evaluadas'  => 0,
+                'total_secciones_completas'  => 0,
+                'total_secciones_parciales'  => 0,
+                'total_secciones_sin_bloque' => 0,
+                'total_bloques_asignados'    => 0,
+                'total_bloques_requeridos'   => 0,
+                'completitud_bloques_pct'    => 0,
+                'tiempo_ms'                  => 0,
             ],
             idCarreraJornada: $idCarreraJornada,
         );
@@ -560,25 +648,30 @@ class GeneradorParcialService
         Horario          $horario,
         PeriodoAcademico $periodo,
         int              $idCarreraJornada,
-        int              $totalEvaluadas,
-        int              $totalAsignadas,
-        int              $totalNoAsignadas,
+        int              $totalSeccionesEvaluadas,
+        int              $totalBloquesRequeridos,
+        int              $totalBloquesAsignados,
+        int              $totalSinBloque,
+        int              $totalParciales,
         float            $tiempoMs = 0,
     ): array {
-        $pct = $totalEvaluadas > 0
-            ? round(($totalAsignadas / $totalEvaluadas) * 100, 1)
+        $pct = $totalBloquesRequeridos > 0
+            ? round(($totalBloquesAsignados / $totalBloquesRequeridos) * 100, 1)
             : 0;
 
         return [
-            'id_horario'         => $horario->id_horario,
-            'id_carrera'         => $horario->id_carrera,
-            'id_periodo'         => $periodo->id_periodo_academico,
-            'id_carrera_jornada' => $idCarreraJornada,
-            'total_evaluadas'    => $totalEvaluadas,
-            'total_asignadas'    => $totalAsignadas,
-            'total_no_asignadas' => $totalNoAsignadas,
-            'completitud_pct'    => $pct,
-            'tiempo_ms'          => $tiempoMs,
+            'id_horario'                => $horario->id_horario,
+            'id_carrera'                => $horario->id_carrera,
+            'id_periodo'                => $periodo->id_periodo_academico,
+            'id_carrera_jornada'        => $idCarreraJornada,
+            'total_secciones_evaluadas' => $totalSeccionesEvaluadas,
+            'total_secciones_completas' => $totalSeccionesEvaluadas - $totalSinBloque - $totalParciales,
+            'total_secciones_parciales' => $totalParciales,
+            'total_secciones_sin_bloque'=> $totalSinBloque,
+            'total_bloques_asignados'   => $totalBloquesAsignados,
+            'total_bloques_requeridos'  => $totalBloquesRequeridos,
+            'completitud_bloques_pct'   => $pct,
+            'tiempo_ms'                 => $tiempoMs,
         ];
     }
 }

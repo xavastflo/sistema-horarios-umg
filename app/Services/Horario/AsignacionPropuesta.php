@@ -2,14 +2,17 @@
 
 namespace App\Services\Horario;
 
-use App\Models\BloqueHorario;
-
 /**
  * Representa una asignación docente-sección-bloque que pasó todas las
  * validaciones y está lista para ser persistida en detalle_horario.
  *
  * Inmutable. Creada por GeneradorParcialService, consumida por
- * PersistenciaHorarioService (Paso 6).
+ * PersistenciaHorarioService.
+ *
+ * FASE 2: añadidos numBloque y bloquesRequeridos para soportar
+ * multi-bloque por sección. Una sección con bloques_semanales = 2
+ * genera dos AsignacionPropuesta: numBloque=1 y numBloque=2.
+ * Ambas van a asignacionesPropuestas y ambas se persisten.
  */
 final class AsignacionPropuesta
 {
@@ -26,6 +29,10 @@ final class AsignacionPropuesta
         public readonly string       $nombreDocente,
         public readonly int          $cicloSemestre,
         public readonly int          $prioridadDocente,
+        /** Posición de este bloque dentro de la sección (1-based) */
+        public readonly int          $numBloque        = 1,
+        /** Total de bloques que requiere la sección según pensum_curso */
+        public readonly int          $bloquesRequeridos = 1,
     ) {}
 
     public function toArray(): array
@@ -43,6 +50,8 @@ final class AsignacionPropuesta
             'docente'                     => $this->nombreDocente,
             'ciclo_semestre'              => $this->cicloSemestre,
             'prioridad_docente'           => $this->prioridadDocente,
+            'num_bloque'                  => $this->numBloque,
+            'bloques_requeridos'          => $this->bloquesRequeridos,
         ];
     }
 }

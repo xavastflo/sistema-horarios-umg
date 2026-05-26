@@ -51,11 +51,18 @@ use Illuminate\Support\Facades\Log;
  *     lo haya modificado entre generar() y confirmar().
  *
  * C2. Franjas en memoria dentro de la transacción:
- *     validarDocenteOcupado() excluye el horario actual, por lo que
- *     no detecta conflictos entre propuestas del mismo horario dentro
- *     de la misma transacción. Se mantienen tres colecciones de franjas
- *     que se actualizan con cada INSERT y se usan para filtrar
- *     las propuestas siguientes por traslape real de tiempo.
+ *     Se mantienen dos colecciones que detectan conflictos entre propuestas
+ *     de la misma transacción antes de cada INSERT:
+ *       $franjasDocente — mismo docente no puede tener 2 clases simultáneas
+ *       $franjasCiclo   — mismo ciclo no puede tener 2 cursos simultáneos
+ *
+ *     ELIMINADO: $franjasHorario (Filtro A global de franja del horario).
+ *     Causaba que ciclos distintos no pudieran usar la misma franja dentro
+ *     del mismo horario maestro. Con aulas fuera del alcance del proyecto,
+ *     el paralelismo entre ciclos es válido y deseable.
+ *
+ *     validarDocenteOcupado() ya no excluye el horario actual completo;
+ *     solo excluye un detalle específico cuando se pasa $excluirDetalleId.
  *
  * C3. Rechazo si hay detalles activos:
  *     confirmar() falla antes de abrir la transacción si el horario
@@ -200,12 +207,17 @@ class PersistenciaHorarioService
 
                 // (C2) Franjas en memoria para detectar conflictos entre
                 // propuestas de esta misma transacción, usando traslape real.
-                // validarDocenteOcupado() excluye el horario actual, por lo que
-                // no detecta dos propuestas del mismo docente dentro del mismo horario.
+                //
+                // ARQUITECTURA PARALELISMO (post-hotfix paralelo_ciclos_v2):
+                //   Filtro A ($franjasHorario) ELIMINADO.
+                //   Causaba que ciclos distintos no pudieran usar la misma franja
+                //   dentro del mismo horario maestro. Con aulas fuera del alcance,
+                //   el paralelismo entre ciclos es válido y deseable.
+                //
+                //   MANTENIDOS:
+                //   Filtro B ($franjasDocente) — mismo docente no puede tener 2 clases simultáneas
+                //   Filtro C ($franjasCiclo)   — mismo ciclo no puede tener 2 cursos simultáneos
                 // Estructura de cada franja: { id_dia, hora_inicio, hora_fin }
-
-                /** Franjas ya insertadas en este horario (cualquier docente) */
-                $franjasHorario = collect();
 
                 /** id_docente → Collection de franjas ocupadas */
                 $franjasDocente = [];
@@ -224,22 +236,8 @@ class PersistenciaHorarioService
                     // Detectan conflictos entre propuestas de esta transacción
                     // antes de ejecutar validarTodo() (que no los vería todavía
                     // si aún no se ha hecho el INSERT anterior).
-
-                    // Filtro A: franja ya ocupada en el horario
-                    if ($this->traslapaConFranjas($franjasHorario, $idDia, $hi, $hf)) {
-                        throw new PersistenciaConflictoException(
-                            propuesta: $propuesta,
-                            conflicto: ValidacionResultado::conConflictos([
-                                ConflictoItem::bloqueOcupadoEnHorario(
-                                    idBloque:               $propuesta->idBloque,
-                                    horaInicio:             $hi,
-                                    horaFin:                $hf,
-                                    nombreDia:              $propuesta->nombreDia,
-                                    nombreSeccionConflicto: '(otra sección en esta generación)',
-                                ),
-                            ]),
-                        );
-                    }
+                    //
+                    // Filtro A ($franjasHorario) ELIMINADO — ver nota en declaración.
 
                     // Filtro B: docente ya tiene propuesta en esta franja
                     $fdocente = $franjasDocente[$propuesta->idDocente] ?? collect();
@@ -292,6 +290,7 @@ class PersistenciaHorarioService
                         idSeccion: $propuesta->idSeccion,
                         periodo:   $periodo,
                         horario:   $horarioBloqueado,
+                        idAsignacionDocenteCurso: $propuesta->idAsignacionDocenteCurso,
                     );
 
                     if ($validacion->tieneConflictos()) {
@@ -316,8 +315,6 @@ class PersistenciaHorarioService
 
                     // ── Actualizar franjas en memoria ────────────────────
                     $franja = ['id_dia' => $idDia, 'hora_inicio' => $hi, 'hora_fin' => $hf];
-
-                    $franjasHorario->push($franja);
 
                     if (! isset($franjasDocente[$propuesta->idDocente])) {
                         $franjasDocente[$propuesta->idDocente] = collect();

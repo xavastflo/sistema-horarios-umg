@@ -17,6 +17,10 @@ return new class extends Migration
             $table->unsignedInteger('id_curso');
             // SQL oficial: tinyint(3) UNSIGNED — número de ciclo/semestre
             $table->unsignedTinyInteger('ciclo_semestre');
+            // Bloques semanales: cuántos bloques horarios requiere este curso por semana
+            // en el contexto de este pensum. Origen de verdad para el algoritmo de horarios.
+            // Default 1 — mínimo 1, máximo 10.
+            $table->unsignedTinyInteger('bloques_semanales')->default(1);
             // SQL oficial: ENUM('activo','inactivo')
             $table->enum('estado', ['activo', 'inactivo'])->default('activo');
             $table->dateTime('fecha_creacion')->useCurrent();

@@ -17,12 +17,14 @@ class PensumCurso extends Model
         'id_pensum',
         'id_curso',
         'ciclo_semestre',
+        'bloques_semanales',
         'estado',
     ];
 
     protected $casts = [
-        'ciclo_semestre' => 'integer',
-        'fecha_creacion' => 'datetime',
+        'ciclo_semestre'    => 'integer',
+        'bloques_semanales' => 'integer',
+        'fecha_creacion'    => 'datetime',
     ];
 
     // ── Relaciones ──────────────────────────────────────────

@@ -141,11 +141,12 @@ class PensumController extends Controller
         }
 
         $pensumCurso = PensumCurso::create([
-            'id_pensum'      => $id,
-            'id_curso'       => $request->id_curso,
-            'ciclo_semestre' => $request->ciclo_semestre,
-            'estado'         => 'activo',
-            'fecha_creacion' => now(),
+            'id_pensum'         => $id,
+            'id_curso'          => $request->id_curso,
+            'ciclo_semestre'    => $request->ciclo_semestre,
+            'bloques_semanales' => $request->bloques_semanales,
+            'estado'            => 'activo',
+            'fecha_creacion'    => now(),
         ]);
 
         HistorialService::registrar(
@@ -190,7 +191,8 @@ class PensumController extends Controller
     public function actualizarCiclo(Request $request, int $idPensum, int $idPensumCurso): JsonResponse
     {
         $request->validate([
-            'ciclo_semestre' => ['required', 'integer', 'min:1', 'max:15'],
+            'ciclo_semestre'    => ['required', 'integer', 'min:1', 'max:15'],
+            'bloques_semanales' => ['required', 'integer', 'min:1', 'max:10'],
         ]);
 
         $pensumCurso = PensumCurso::where('id_pensum', $idPensum)
@@ -201,12 +203,21 @@ class PensumController extends Controller
             tabla:         'pensum_curso',
             idRegistro:    $pensumCurso->id_pensum_curso,
             tipoCambio:    'update',
-            valorAnterior: ['ciclo_semestre' => $pensumCurso->ciclo_semestre],
-            valorNuevo:    ['ciclo_semestre' => $request->ciclo_semestre],
-            motivo:        'Actualización de ciclo/semestre',
+            valorAnterior: [
+                'ciclo_semestre'    => $pensumCurso->ciclo_semestre,
+                'bloques_semanales' => $pensumCurso->bloques_semanales,
+            ],
+            valorNuevo:    [
+                'ciclo_semestre'    => $request->ciclo_semestre,
+                'bloques_semanales' => $request->bloques_semanales,
+            ],
+            motivo:        'Actualización de ciclo/semestre y bloques semanales',
         );
 
-        $pensumCurso->update(['ciclo_semestre' => $request->ciclo_semestre]);
+        $pensumCurso->update([
+            'ciclo_semestre'    => $request->ciclo_semestre,
+            'bloques_semanales' => $request->bloques_semanales,
+        ]);
 
         return response()->json($pensumCurso->load('curso'));
     }
