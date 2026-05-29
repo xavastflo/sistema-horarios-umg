@@ -17,9 +17,21 @@ class PensumController extends Controller
 {
     /**
      * GET /api/pensums
+     *
+     * Administrador: todos los pensums.
+     * Coordinador:   solo pensums cuya carrera tiene id_usuario_coordinador = id_usuario.
+     * Precedencia:   si el usuario tiene ambos roles, se comporta como administrador.
      */
     public function index(Request $request): JsonResponse
     {
+        $usuario = $request->user();
+
+        // Admin tiene precedencia: si tiene ese rol, $idCoord = null → sin filtro.
+        // Solo aplica filtro si NO es admin Y SÍ es coordinador.
+        $idCoord = (! $usuario->esAdministrador() && $usuario->esCoordinador())
+            ? $usuario->id_usuario
+            : null;
+
         $query = Pensum::with(['carrera', 'periodoAcademico'])
             ->when($request->estado, fn($q) => $q->where('estado', $request->estado))
             ->when($request->id_carrera, fn($q) => $q->where('id_carrera', $request->id_carrera))
@@ -28,6 +40,11 @@ class PensumController extends Controller
                 $q2->where('nombre_pensum', 'like', "%{$request->buscar}%")
                    ->orWhere('codigo_pensum', 'like', "%{$request->buscar}%");
             }))
+            // Scope coordinador: Pensum→carrera() es BelongsTo, whereHas disponible
+            ->when($idCoord, fn($q) => $q->whereHas(
+                'carrera',
+                fn($q2) => $q2->where('id_usuario_coordinador', $idCoord)
+            ))
             ->orderBy('nombre_pensum');
 
         return response()->json($query->get());

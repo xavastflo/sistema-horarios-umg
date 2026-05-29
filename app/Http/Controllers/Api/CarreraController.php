@@ -15,9 +15,21 @@ class CarreraController extends Controller
 {
     /**
      * GET /api/carreras
+     *
+     * Administrador: todas las carreras.
+     * Coordinador:   solo las carreras donde carrera.id_usuario_coordinador = id_usuario.
+     * Precedencia:   si el usuario tiene ambos roles, se comporta como administrador.
      */
     public function index(Request $request): JsonResponse
     {
+        $usuario = $request->user();
+
+        // Admin tiene precedencia: $idCoord = null → when() no aplica → ve todo.
+        // Solo aplica filtro si NO es admin Y SÍ es coordinador.
+        $idCoord = (! $usuario->esAdministrador() && $usuario->esCoordinador())
+            ? $usuario->id_usuario
+            : null;
+
         $query = Carrera::with(['facultad', 'coordinador', 'jornadasActivas'])
             ->when($request->estado !== null, fn($q) => $q->where('carrera.estado', $request->estado))
             ->when($request->id_facultad, fn($q) => $q->where('id_facultad', $request->id_facultad))
@@ -25,6 +37,8 @@ class CarreraController extends Controller
                 $q2->where('nombre_carrera', 'like', "%{$request->buscar}%")
                    ->orWhere('codigo_carrera', 'like', "%{$request->buscar}%");
             }))
+            // Scope coordinador: WHERE directo en la propia tabla carrera
+            ->when($idCoord, fn($q) => $q->where('carrera.id_usuario_coordinador', $idCoord))
             ->orderBy('nombre_carrera');
 
         return response()->json($query->get());

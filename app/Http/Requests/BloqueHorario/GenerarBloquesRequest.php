@@ -56,4 +56,9 @@ class GenerarBloquesRequest extends FormRequest
             'duracion_minutos.min'             => 'La duración mínima de un bloque es 45 minutos.',
         ];
     }
+    
+    protected function validaDuracionComoRangoTotal(): bool
+    {
+        return true;
+    }
 }

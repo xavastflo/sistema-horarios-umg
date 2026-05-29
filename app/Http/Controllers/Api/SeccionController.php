@@ -20,11 +20,20 @@ class SeccionController extends Controller
      * GET /api/secciones
      * Filtros directos: id_carrera_jornada, id_curso, id_periodo_academico, estado
      *
-     * Tras la reingeniería, el filtro por jornada es un simple WHERE directo
-     * (ya no requiere un whereHas con 4 joins derivados).
+     * Administrador: todas las secciones.
+     * Coordinador:   solo secciones de sus carreras (carreraJornada→carrera.id_usuario_coordinador).
+     * Precedencia:   si el usuario tiene ambos roles, se comporta como administrador.
      */
     public function index(Request $request): JsonResponse
     {
+        $usuario = $request->user();
+
+        // Admin tiene precedencia: $idCoord = null → when() no aplica → ve todo.
+        // Solo aplica filtro si NO es admin Y SÍ es coordinador.
+        $idCoord = (! $usuario->esAdministrador() && $usuario->esCoordinador())
+            ? $usuario->id_usuario
+            : null;
+
         $query = Seccion::with([
             'carreraJornada.jornada',
             'carreraJornada.carrera',
@@ -40,6 +49,11 @@ class SeccionController extends Controller
             $q->where('id_periodo_academico', $request->id_periodo_academico))
         ->when($request->estado, fn($q) =>
             $q->where('estado', $request->estado))
+        // Scope coordinador: encadenado carreraJornada→carrera (relaciones existen en el modelo)
+        ->when($idCoord, fn($q) => $q->whereHas(
+            'carreraJornada.carrera',
+            fn($q2) => $q2->where('id_usuario_coordinador', $idCoord)
+        ))
         ->orderBy('id_carrera_jornada')
         ->orderBy('numero_seccion');
 
@@ -71,13 +85,9 @@ class SeccionController extends Controller
             ], 422);
         }
 
-        // ── Validar compatibilidad ciclo_semestre ↔ tipo de período ──────
-        //
-        // Regla: numero_periodo = 1 (Impares) → solo ciclos 1,3,5,7,9,11
-        //        numero_periodo = 2 (Pares)   → solo ciclos 2,4,6,8,10,12
-        //
-        // La carrera real se obtiene desde id_carrera_jornada para anclar
-        // el ciclo al pensum correcto (no al primer pensum que encuentre).
+        // ── Validar compatibilidad ciclo_semestre ↔ tipo de período ──────────
+        // numero_periodo = 1 (Impares) → solo ciclos 1,3,5,7,9,11
+        // numero_periodo = 2 (Pares)   → solo ciclos 2,4,6,8,10,12
         $periodo = PeriodoAcademico::find($request->id_periodo_academico);
 
         if ($periodo) {
@@ -94,7 +104,6 @@ class SeccionController extends Controller
                     ->where('p.estado',     'activo')
                     ->value('pc.ciclo_semestre');
 
-                // Error explícito si el curso no está en ningún pensum activo de la carrera
                 if ($cicloDelCurso === null) {
                     return response()->json([
                         'message' => 'El curso seleccionado no pertenece al pensum activo de la carrera. '
@@ -103,7 +112,6 @@ class SeccionController extends Controller
                     ], 422);
                 }
 
-                // Error explícito si el ciclo no es compatible con el tipo de período
                 if (! in_array($cicloDelCurso, $periodo->ciclosPermitidos(), true)) {
                     $tipoPeriodo = $periodo->esPeriodoImpar()
                         ? 'Semestres Impares — solo ciclos 1, 3, 5, 7, 9, 11'

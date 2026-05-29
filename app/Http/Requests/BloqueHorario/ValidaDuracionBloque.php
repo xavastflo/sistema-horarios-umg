@@ -8,22 +8,30 @@ use Illuminate\Support\Facades\DB;
 /**
  * Trait ValidaDuracionBloque
  *
- * Dos validaciones aplicadas en withValidator():
+ * Validaciones aplicadas en withValidator():
  *
- * A) COHERENCIA hora_fin - hora_inicio == duracion_minutos
- *    El controller guarda duracion_minutos tal como lo envía el frontend.
- *    Si el frontend envía hora_inicio=18:00, hora_fin=18:50, duracion_minutos=90
- *    los datos quedarían inconsistentes en BD. Se rechaza.
+ * A) COHERENCIA DE DURACIÓN
  *
- * B) MÚLTIPLO según jornada
+ *    - Para creación manual de un bloque:
+ *      duracion_minutos debe coincidir exactamente con hora_fin - hora_inicio.
+ *
+ *    - Para generación automática de varios bloques:
+ *      duracion_minutos representa la duración de cada bloque, mientras que
+ *      hora_inicio_general y hora_fin_general representan el rango total.
+ *      En ese caso, el rango total debe ser divisible entre duracion_minutos.
+ *
+ * B) MÚLTIPLO SEGÚN JORNADA
  *    matutina / vespertina → múltiplo de 45 min
  *    fin_de_semana         → múltiplo de 60 min
  *
  * Ambas validaciones solo actúan si los campos base pasaron rules().
- * Si algún campo básico ya tiene error no se acumula un segundo mensaje.
+ * Si algún campo básico ya tiene error, no se acumula un segundo mensaje.
  *
  * Sobreescribir campoHoraInicio() / campoHoraFin() en requests que usen
  * nombres de campo distintos (ej. hora_inicio_general).
+ *
+ * Sobreescribir validarComoRangoTotal() en requests donde hora_inicio/hora_fin
+ * representan un rango general para generar varios bloques.
  */
 trait ValidaDuracionBloque
 {
@@ -51,6 +59,22 @@ trait ValidaDuracionBloque
         return 'hora_fin';
     }
 
+    /**
+     * Por defecto, el request representa un bloque individual.
+     *
+     * StoreBloqueHorarioRequest:
+     *   hora_inicio / hora_fin = rango del bloque individual
+     *   duracion_minutos debe coincidir exactamente con ese rango.
+     *
+     * GenerarBloquesRequest debe sobrescribir este método y devolver true:
+     *   hora_inicio_general / hora_fin_general = rango total
+     *   duracion_minutos = duración de cada bloque generado.
+     */
+    protected function validaDuracionComoRangoTotal(): bool
+    {
+        return false;
+    }
+
     public function withValidator(Validator $validator): void
     {
         $validator->after(function (Validator $v) {
@@ -60,7 +84,7 @@ trait ValidaDuracionBloque
             $campoHi   = $this->campoHoraInicio();
             $campoHf   = $this->campoHoraFin();
 
-            // No acumular errores si los campos base ya fallaron
+            // No acumular errores si los campos base ya fallaron.
             if ($v->errors()->hasAny([$campoDur, $campoJorn, $campoHi, $campoHf])) {
                 return;
             }
@@ -74,36 +98,50 @@ trait ValidaDuracionBloque
                 return;
             }
 
-            // ── Validación A: coherencia duracion_minutos == hora_fin - hora_inicio ──
-            //
-            // El controller guarda $request->duracion_minutos directamente (no lo recalcula).
-            // Prevenir inconsistencia entre los tres campos en BD.
+            // ── Validación A: coherencia del rango horario ───────────────────────
             $minutosReales = $this->calcularMinutos($horaInicio, $horaFin);
 
-            if ($minutosReales !== null && $minutosReales !== $duracion) {
-                $v->errors()->add(
-                    $campoDur,
-                    "La duración indicada ({$duracion} min) no coincide con el rango horario "
-                    . "{$horaInicio}–{$horaFin} ({$minutosReales} min reales)."
-                );
-                return; // Con incoherencia no tiene sentido validar el múltiplo
+            if ($minutosReales !== null) {
+                if ($this->validaDuracionComoRangoTotal()) {
+                    // Generación automática:
+                    // El rango total debe dividirse exactamente en bloques de duración indicada.
+                    if ($minutosReales % $duracion !== 0) {
+                        $v->errors()->add(
+                            $campoDur,
+                            "La duración indicada ({$duracion} min) no divide exactamente el rango horario "
+                            . "{$horaInicio}–{$horaFin} ({$minutosReales} min reales)."
+                        );
+
+                        return;
+                    }
+                } elseif ($minutosReales !== $duracion) {
+                    // Creación manual:
+                    // La duración indicada debe coincidir con el rango del bloque individual.
+                    $v->errors()->add(
+                        $campoDur,
+                        "La duración indicada ({$duracion} min) no coincide con el rango horario "
+                        . "{$horaInicio}–{$horaFin} ({$minutosReales} min reales)."
+                    );
+
+                    return;
+                }
             }
 
-            // ── Validación B: múltiplo según jornada ────────────────────────────────
+            // ── Validación B: múltiplo según jornada ─────────────────────────────
             $nombreJornada = DB::table('carrera_jornada as cj')
                 ->join('jornada as j', 'cj.id_jornada', '=', 'j.id_jornada')
                 ->where('cj.id_carrera_jornada', $idCarreraJornada)
                 ->value('j.nombre_jornada');
 
             if (! $nombreJornada) {
-                return; // exists en rules() ya lo reportó
+                return; // exists en rules() ya lo reportó.
             }
 
             $multiplo = match ($nombreJornada) {
                 'matutina'      => 45,
                 'vespertina'    => 45,
                 'fin_de_semana' => 60,
-                default         => null,  // jornada futura: no aplicar regla
+                default         => null, // jornada futura: no aplicar regla
             };
 
             if ($multiplo === null) {
@@ -119,7 +157,7 @@ trait ValidaDuracionBloque
                 };
 
                 $ejemplos = implode(', ', array_map(
-                    fn($n) => ($multiplo * $n) . ' min',
+                    fn ($n) => ($multiplo * $n) . ' min',
                     range(1, min(4, (int) floor(300 / $multiplo)))
                 ));
 
@@ -134,7 +172,7 @@ trait ValidaDuracionBloque
 
     /**
      * Calcula la diferencia en minutos entre dos horas en formato HH:MM.
-     * Retorna null si alguna hora no es válida.
+     * Retorna null si alguna hora no es válida o si la diferencia no es positiva.
      */
     private function calcularMinutos(string $horaInicio, string $horaFin): ?int
     {

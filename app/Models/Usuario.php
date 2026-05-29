@@ -88,6 +88,25 @@ class Usuario extends Authenticatable
         return $this->rolesActivos()->where('nombre_rol', $nombreRol)->exists();
     }
 
+    /**
+     * True si el usuario tiene el rol administrador activo.
+     * Tiene precedencia sobre coordinador: si tiene ambos roles, ve todo sin restricción.
+     */
+    public function esAdministrador(): bool
+    {
+        return $this->tieneRol('administrador');
+    }
+
+    /**
+     * True si el usuario tiene el rol coordinador activo.
+     * Usar siempre con ! esAdministrador() para manejar correctamente
+     * el caso de un usuario con ambos roles simultáneos.
+     */
+    public function esCoordinador(): bool
+    {
+        return $this->tieneRol('coordinador');
+    }
+
     public function nombresCompletos(): string
     {
         return trim("{$this->nombres} {$this->apellidos}");
