@@ -34,6 +34,9 @@ class UsuarioController extends Controller
             ->when($request->id_rol, fn($q) => $q->whereHas(
                 'rolesActivos', fn($q2) => $q2->where('rol.id_rol', $request->id_rol)
             ))
+            // Excluir usuarios que ya tienen perfil docente (activo o inactivo).
+            // id_usuario es UNIQUE en docente — no puede registrarse dos veces.
+            ->when($request->sin_docente, fn($q) => $q->whereDoesntHave('docente'))
             ->orderBy('apellidos')
             ->orderBy('nombres');
 

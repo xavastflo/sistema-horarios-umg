@@ -72,6 +72,23 @@ class PeriodoAcademico extends Model
         return $this->estado === self::ESTADO_ACTIVO;
     }
 
+    public function esPeriodoImpar(): bool
+    {
+        return (int) $this->numero_periodo === 1;
+    }
+
+    public function esPeriodoPar(): bool
+    {
+        return (int) $this->numero_periodo === 2;
+    }
+
+    public function ciclosPermitidos(): array
+    {
+        return $this->esPeriodoImpar()
+            ? [1, 3, 5, 7, 9, 11]
+            : [2, 4, 6, 8, 10, 12];
+    }
+    
     // ── Scopes ───────────────────────────────────────────────
     public function scopeVigente($query)
     {

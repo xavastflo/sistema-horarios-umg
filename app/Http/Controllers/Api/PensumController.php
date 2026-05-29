@@ -8,6 +8,7 @@ use App\Http\Requests\Pensum\UpdatePensumRequest;
 use App\Http\Requests\PensumCurso\StorePensumCursoRequest;
 use App\Models\Pensum;
 use App\Models\PensumCurso;
+use App\Models\PeriodoAcademico;
 use App\Services\HistorialService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -103,6 +104,10 @@ class PensumController extends Controller
     /**
      * GET /api/pensums/{pensum}/cursos
      * Lista los cursos del pensum, agrupables por ciclo.
+     *
+     * Parámetro opcional: ?id_periodo_academico={id}
+     *   Con él: filtra pensum_curso.ciclo_semestre por ciclosPermitidos() del período.
+     *   Sin él: devuelve todos los cursos del pensum (comportamiento original intacto).
      */
     public function cursos(Request $request, int $id): JsonResponse
     {
@@ -114,6 +119,16 @@ class PensumController extends Controller
             ->when($request->ciclo_semestre, fn($q) => $q->where('ciclo_semestre', $request->ciclo_semestre))
             ->orderBy('ciclo_semestre')
             ->orderBy('id_pensum_curso');
+
+        // Filtro opcional por tipo de período (impares/pares).
+        // Solo activo si se envía id_periodo_academico como query param.
+        // Las vistas admin del pensum completo NO envían este param → siguen viendo todo.
+        if ($request->filled('id_periodo_academico')) {
+            $periodo = PeriodoAcademico::find((int) $request->id_periodo_academico);
+            if ($periodo) {
+                $query->whereIn('ciclo_semestre', $periodo->ciclosPermitidos());
+            }
+        }
 
         return response()->json($query->get());
     }

@@ -7,6 +7,7 @@ use App\Http\Requests\Seccion\StoreSeccionRequest;
 use App\Http\Requests\AsignacionDocenteCurso\StoreAsignacionRequest;
 use App\Models\AsignacionDocenteCurso;
 use App\Models\Docente;
+use App\Models\PeriodoAcademico;
 use App\Models\Seccion;
 use App\Services\HistorialService;
 use Illuminate\Http\JsonResponse;
@@ -68,6 +69,55 @@ class SeccionController extends Controller
                 'message' => 'Ya existe esa sección para este curso, período y jornada.',
                 'errors'  => ['numero_seccion' => ['Sección duplicada en esta jornada.']],
             ], 422);
+        }
+
+        // ── Validar compatibilidad ciclo_semestre ↔ tipo de período ──────
+        //
+        // Regla: numero_periodo = 1 (Impares) → solo ciclos 1,3,5,7,9,11
+        //        numero_periodo = 2 (Pares)   → solo ciclos 2,4,6,8,10,12
+        //
+        // La carrera real se obtiene desde id_carrera_jornada para anclar
+        // el ciclo al pensum correcto (no al primer pensum que encuentre).
+        $periodo = PeriodoAcademico::find($request->id_periodo_academico);
+
+        if ($periodo) {
+            $idCarreraReal = DB::table('carrera_jornada')
+                ->where('id_carrera_jornada', $request->id_carrera_jornada)
+                ->value('id_carrera');
+
+            if ($idCarreraReal) {
+                $cicloDelCurso = DB::table('pensum_curso as pc')
+                    ->join('pensum as p', 'pc.id_pensum', '=', 'p.id_pensum')
+                    ->where('pc.id_curso',  $request->id_curso)
+                    ->where('pc.estado',    'activo')
+                    ->where('p.id_carrera', $idCarreraReal)
+                    ->where('p.estado',     'activo')
+                    ->value('pc.ciclo_semestre');
+
+                // Error explícito si el curso no está en ningún pensum activo de la carrera
+                if ($cicloDelCurso === null) {
+                    return response()->json([
+                        'message' => 'El curso seleccionado no pertenece al pensum activo de la carrera. '
+                            . 'Verifique que el curso esté asociado a un pensum activo antes de crear la sección.',
+                        'errors'  => ['id_curso' => ['El curso no pertenece al pensum activo de esta carrera.']],
+                    ], 422);
+                }
+
+                // Error explícito si el ciclo no es compatible con el tipo de período
+                if (! in_array($cicloDelCurso, $periodo->ciclosPermitidos(), true)) {
+                    $tipoPeriodo = $periodo->esPeriodoImpar()
+                        ? 'Semestres Impares — solo ciclos 1, 3, 5, 7, 9, 11'
+                        : 'Semestres Pares — solo ciclos 2, 4, 6, 8, 10, 12';
+
+                    return response()->json([
+                        'message' => "El curso seleccionado pertenece al ciclo {$cicloDelCurso}, "
+                            . "que no corresponde al tipo de período académico elegido ({$tipoPeriodo}).",
+                        'errors'  => [
+                            'id_curso' => ["Ciclo {$cicloDelCurso} no es válido para este período."],
+                        ],
+                    ], 422);
+                }
+            }
         }
 
         $seccion = Seccion::create([
