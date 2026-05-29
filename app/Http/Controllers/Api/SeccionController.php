@@ -96,12 +96,22 @@ class SeccionController extends Controller
                 ->value('id_carrera');
 
             if ($idCarreraReal) {
+                // Obtener el año del período para anclar el pensum vigente
+                $anioDelPeriodo = (int) DB::table('periodo_academico')
+                    ->where('id_periodo_academico', $request->id_periodo_academico)
+                    ->value('anio');
+
                 $cicloDelCurso = DB::table('pensum_curso as pc')
                     ->join('pensum as p', 'pc.id_pensum', '=', 'p.id_pensum')
                     ->where('pc.id_curso',  $request->id_curso)
                     ->where('pc.estado',    'activo')
                     ->where('p.id_carrera', $idCarreraReal)
                     ->where('p.estado',     'activo')
+                    ->where('p.anio_inicio_vigencia', '<=', $anioDelPeriodo)
+                    ->where(function ($q) use ($anioDelPeriodo) {
+                        $q->whereNull('p.anio_fin_vigencia')
+                          ->orWhere('p.anio_fin_vigencia', '>=', $anioDelPeriodo);
+                    })
                     ->value('pc.ciclo_semestre');
 
                 if ($cicloDelCurso === null) {
@@ -232,29 +242,42 @@ class SeccionController extends Controller
             ], 422);
         }
 
+        // Obtener el año del período de la sección PRIMERO, para anclar el pensum vigente
+        // tanto en la búsqueda de cicloDelCurso como en la validación de tieneMismoCiclo.
+        $anioSec = (int) DB::table('periodo_academico')
+            ->where('id_periodo_academico', $seccion->id_periodo_academico)
+            ->value('anio');
+
         $cicloDelCurso = DB::table('pensum_curso as pc')
             ->join('pensum as p', 'pc.id_pensum', '=', 'p.id_pensum')
             ->where('pc.id_curso',  $seccion->id_curso)
             ->where('pc.estado',    'activo')
             ->where('p.id_carrera', $idCarreraReal)
             ->where('p.estado',     'activo')
+            ->where('p.anio_inicio_vigencia', '<=', $anioSec)
+            ->where(function ($q) use ($anioSec) {
+                $q->whereNull('p.anio_fin_vigencia')
+                  ->orWhere('p.anio_fin_vigencia', '>=', $anioSec);
+            })
             ->value('pc.ciclo_semestre');
-
-        if ($cicloDelCurso === null) {
-            return response()->json([
-                'message' => 'El curso no pertenece a un pensum activo de la carrera/jornada de esta sección. Verifique el pensum antes de asignar el docente.',
-            ], 422);
-        }
 
         $tieneMismoCiclo = AsignacionDocenteCurso::where('id_docente', $request->id_docente)
             ->where('estado', 'activo')
             ->whereHas('seccion', fn($q) => $q->where('id_periodo_academico', $seccion->id_periodo_academico))
             ->whereHas('seccion.carreraJornada', fn($q) => $q->where('id_carrera', $idCarreraReal))
-            ->whereHas('seccion.curso', function ($q) use ($cicloDelCurso, $idCarreraReal) {
-                $q->whereHas('pensumCursos', function ($q2) use ($cicloDelCurso, $idCarreraReal) {
+            ->whereHas('seccion.curso', function ($q) use ($cicloDelCurso, $idCarreraReal, $anioSec) {
+                $q->whereHas('pensumCursos', function ($q2) use ($cicloDelCurso, $idCarreraReal, $anioSec) {
                     $q2->where('pensum_curso.ciclo_semestre', $cicloDelCurso)
                        ->where('pensum_curso.estado', 'activo')
-                       ->whereHas('pensum', fn($q3) => $q3->where('id_carrera', $idCarreraReal)->where('estado', 'activo'));
+                       ->whereHas('pensum', function ($q3) use ($idCarreraReal, $anioSec) {
+                           $q3->where('id_carrera', $idCarreraReal)
+                              ->where('estado', 'activo')
+                              ->where('anio_inicio_vigencia', '<=', $anioSec)
+                              ->where(function ($q4) use ($anioSec) {
+                                  $q4->whereNull('anio_fin_vigencia')
+                                     ->orWhere('anio_fin_vigencia', '>=', $anioSec);
+                              });
+                       });
                 });
             })
             ->exists();

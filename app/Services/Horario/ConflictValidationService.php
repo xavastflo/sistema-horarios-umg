@@ -226,7 +226,7 @@ class ConflictValidationService
      * Verifica que no existan dos cursos del mismo ciclo_semestre asignados
      * a una franja traslapante dentro del mismo id_horario.
      *
-     * Ancla al pensum correcto via Horario.id_carrera + Horario.id_periodo_academico.
+     * Ancla al pensum vigente via Horario.id_carrera + año del período académico.
      */
     public function validarCicloTraslape(
         int     $idSeccion,
@@ -238,10 +238,19 @@ class ConflictValidationService
         $idCarrera = $horario->id_carrera;
         $idPeriodo = $horario->id_periodo_academico;
 
+        $anioPeriodo = (int) DB::table('periodo_academico')
+            ->where('id_periodo_academico', $idPeriodo)
+            ->value('anio');
+
         $idPensum = DB::table('pensum')
             ->where('id_carrera', $idCarrera)
-            ->where('id_periodo_academico', $idPeriodo)
             ->where('estado', 'activo')
+            ->where('anio_inicio_vigencia', '<=', $anioPeriodo)
+            ->where(function ($q) use ($anioPeriodo) {
+                $q->whereNull('anio_fin_vigencia')
+                  ->orWhere('anio_fin_vigencia', '>=', $anioPeriodo);
+            })
+            ->orderByDesc('anio_inicio_vigencia')
             ->value('id_pensum');
 
         if ($idPensum === null) return ValidacionResultado::sinConflictos();

@@ -393,6 +393,10 @@ class GeneradorParcialService
         int $idPeriodo,
         int $idCarreraJornada,
     ): Collection {
+        $anioPeriodo = (int) DB::table('periodo_academico')
+            ->where('id_periodo_academico', $idPeriodo)
+            ->value('anio');
+
         return DB::table('asignacion_docente_curso as adc')
             ->join('docente as d',   'adc.id_docente',  '=', 'd.id_docente')
             ->join('usuario as u',   'd.id_usuario',    '=', 'u.id_usuario')
@@ -401,14 +405,18 @@ class GeneradorParcialService
             // Filtro directo por jornada — clave de la reingeniería
             ->where('s.id_carrera_jornada', $idCarreraJornada)
             // Solo secciones que pertenecen a la carrera (via pensum activo)
-            ->whereExists(function ($sub) use ($idCarrera, $idPeriodo) {
+            ->whereExists(function ($sub) use ($idCarrera, $anioPeriodo) {
                 $sub->select(DB::raw(1))
                     ->from('pensum_curso as pc')
                     ->join('pensum as p', 'pc.id_pensum', '=', 'p.id_pensum')
                     ->whereColumn('pc.id_curso', 's.id_curso')
                     ->where('p.id_carrera', $idCarrera)
-                    ->where('p.id_periodo_academico', $idPeriodo)
                     ->where('p.estado', 'activo')
+                    ->where('p.anio_inicio_vigencia', '<=', $anioPeriodo)
+                    ->where(function ($q) use ($anioPeriodo) {
+                        $q->whereNull('p.anio_fin_vigencia')
+                          ->orWhere('p.anio_fin_vigencia', '>=', $anioPeriodo);
+                    })
                     ->where('pc.estado', 'activo');
             })
             ->where('s.id_periodo_academico', $idPeriodo)
@@ -416,15 +424,19 @@ class GeneradorParcialService
             ->where('d.estado',   'activo')
             ->where('s.estado',   'activo')
             // ciclo_semestre del pensum correcto (carrera + período)
-            ->leftJoin('pensum_curso as pc2', function ($join) use ($idCarrera, $idPeriodo) {
+            ->leftJoin('pensum_curso as pc2', function ($join) use ($idCarrera, $anioPeriodo) {
                 $join->on('pc2.id_curso', '=', 's.id_curso')
-                     ->whereExists(function ($sub) use ($idCarrera, $idPeriodo) {
+                     ->whereExists(function ($sub) use ($idCarrera, $anioPeriodo) {
                          $sub->select(DB::raw(1))
                              ->from('pensum as p2')
                              ->whereColumn('p2.id_pensum', 'pc2.id_pensum')
                              ->where('p2.id_carrera', $idCarrera)
-                             ->where('p2.id_periodo_academico', $idPeriodo)
-                             ->where('p2.estado', 'activo');
+                             ->where('p2.estado', 'activo')
+                             ->where('p2.anio_inicio_vigencia', '<=', $anioPeriodo)
+                             ->where(function ($q) use ($anioPeriodo) {
+                                 $q->whereNull('p2.anio_fin_vigencia')
+                                   ->orWhere('p2.anio_fin_vigencia', '>=', $anioPeriodo);
+                             });
                      })
                      ->where('pc2.estado', 'activo');
             })
@@ -455,19 +467,27 @@ class GeneradorParcialService
         int $idPeriodo,
         int $idCarreraJornada,
     ): Collection {
+        $anioPeriodo = (int) DB::table('periodo_academico')
+            ->where('id_periodo_academico', $idPeriodo)
+            ->value('anio');
+
         return DB::table('seccion as s')
             ->join('curso as c', 's.id_curso', '=', 'c.id_curso')
             // Filtro directo por jornada
             ->where('s.id_carrera_jornada', $idCarreraJornada)
             // Solo secciones de la carrera (via pensum activo)
-            ->whereExists(function ($sub) use ($idCarrera, $idPeriodo) {
+            ->whereExists(function ($sub) use ($idCarrera, $anioPeriodo) {
                 $sub->select(DB::raw(1))
                     ->from('pensum_curso as pc')
                     ->join('pensum as p', 'pc.id_pensum', '=', 'p.id_pensum')
                     ->whereColumn('pc.id_curso', 's.id_curso')
                     ->where('p.id_carrera', $idCarrera)
-                    ->where('p.id_periodo_academico', $idPeriodo)
                     ->where('p.estado', 'activo')
+                    ->where('p.anio_inicio_vigencia', '<=', $anioPeriodo)
+                    ->where(function ($q) use ($anioPeriodo) {
+                        $q->whereNull('p.anio_fin_vigencia')
+                          ->orWhere('p.anio_fin_vigencia', '>=', $anioPeriodo);
+                    })
                     ->where('pc.estado', 'activo');
             })
             // Sin asignación docente activa
@@ -480,15 +500,19 @@ class GeneradorParcialService
             ->where('s.id_periodo_academico', $idPeriodo)
             ->where('s.estado', 'activo')
             // ciclo_semestre del pensum correcto
-            ->leftJoin('pensum_curso as pc2', function ($join) use ($idCarrera, $idPeriodo) {
+            ->leftJoin('pensum_curso as pc2', function ($join) use ($idCarrera, $anioPeriodo) {
                 $join->on('pc2.id_curso', '=', 's.id_curso')
-                     ->whereExists(function ($sub) use ($idCarrera, $idPeriodo) {
+                     ->whereExists(function ($sub) use ($idCarrera, $anioPeriodo) {
                          $sub->select(DB::raw(1))
                              ->from('pensum as p2')
                              ->whereColumn('p2.id_pensum', 'pc2.id_pensum')
                              ->where('p2.id_carrera', $idCarrera)
-                             ->where('p2.id_periodo_academico', $idPeriodo)
-                             ->where('p2.estado', 'activo');
+                             ->where('p2.estado', 'activo')
+                             ->where('p2.anio_inicio_vigencia', '<=', $anioPeriodo)
+                             ->where(function ($q) use ($anioPeriodo) {
+                                 $q->whereNull('p2.anio_fin_vigencia')
+                                   ->orWhere('p2.anio_fin_vigencia', '>=', $anioPeriodo);
+                             });
                      })
                      ->where('pc2.estado', 'activo');
             })

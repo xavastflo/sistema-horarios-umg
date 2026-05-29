@@ -32,10 +32,9 @@ class PensumController extends Controller
             ? $usuario->id_usuario
             : null;
 
-        $query = Pensum::with(['carrera', 'periodoAcademico'])
+        $query = Pensum::with(['carrera'])
             ->when($request->estado, fn($q) => $q->where('estado', $request->estado))
             ->when($request->id_carrera, fn($q) => $q->where('id_carrera', $request->id_carrera))
-            ->when($request->id_periodo_academico, fn($q) => $q->where('id_periodo_academico', $request->id_periodo_academico))
             ->when($request->buscar, fn($q) => $q->where(function ($q2) use ($request) {
                 $q2->where('nombre_pensum', 'like', "%{$request->buscar}%")
                    ->orWhere('codigo_pensum', 'like', "%{$request->buscar}%");
@@ -57,7 +56,8 @@ class PensumController extends Controller
     {
         $pensum = Pensum::create([
             'id_carrera'           => $request->id_carrera,
-            'id_periodo_academico' => $request->id_periodo_academico,
+            'anio_inicio_vigencia' => $request->anio_inicio_vigencia,
+            'anio_fin_vigencia'    => $request->anio_fin_vigencia ?? null,
             'nombre_pensum'        => $request->nombre_pensum,
             'codigo_pensum'        => strtoupper($request->codigo_pensum),
             'descripcion'          => $request->descripcion,
@@ -68,7 +68,7 @@ class PensumController extends Controller
 
         HistorialService::registrarCreacion($pensum, 'pensum');
 
-        return response()->json($pensum->load(['carrera', 'periodoAcademico']), 201);
+        return response()->json($pensum->load(['carrera']), 201);
     }
 
     /**
@@ -78,7 +78,6 @@ class PensumController extends Controller
     {
         $pensum = Pensum::with([
             'carrera',
-            'periodoAcademico',
             'pensumCursos.curso',
         ])->findOrFail($id);
 
@@ -96,11 +95,17 @@ class PensumController extends Controller
         if ($request->has('codigo_pensum')) {
             $datos['codigo_pensum'] = strtoupper($request->codigo_pensum);
         }
+        if ($request->has('anio_inicio_vigencia')) {
+            $datos['anio_inicio_vigencia'] = $request->anio_inicio_vigencia;
+        }
+        if ($request->has('anio_fin_vigencia')) {
+            $datos['anio_fin_vigencia'] = $request->anio_fin_vigencia ?: null;
+        }
 
         HistorialService::registrarActualizacion($pensum, 'pensum');
         $pensum->update($datos);
 
-        return response()->json($pensum->load(['carrera', 'periodoAcademico']));
+        return response()->json($pensum->load(['carrera']));
     }
 
     /**

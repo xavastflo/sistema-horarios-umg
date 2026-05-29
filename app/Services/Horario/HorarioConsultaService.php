@@ -26,8 +26,8 @@ use Illuminate\Support\Facades\DB;
  * ── ciclo_semestre ───────────────────────────────────────────────
  *
  * Se resuelve siempre a través de:
- *   Horario.id_carrera + Horario.id_periodo_academico
- *   → Pensum (activo de esa carrera y período)
+ *   Horario.id_carrera + año de Horario.id_periodo_academico
+ *   → Pensum vigente de esa carrera
  *   → Pensum_Curso (por id_curso de la sección)
  * No se toma de ningún otro pensum del período para evitar
  * ambigüedad cuando el mismo curso existe en varias carreras.
@@ -140,12 +140,21 @@ class HorarioConsultaService
             $this->verificarCarreraCoordinador($horario->id_carrera, $idUsuarioCoordinador);
         }
 
-        // Obtener el id_pensum activo de esta carrera y período
+        // Obtener el id_pensum vigente de esta carrera según el año del período
         // (mismo contexto que usa ConflictValidationService::validarCicloTraslape)
-        $idPensum = DB::table('pensum')
-            ->where('id_carrera',          $horario->id_carrera)
+        $anioPeriodo = (int) DB::table('periodo_academico')
             ->where('id_periodo_academico', $horario->id_periodo_academico)
+            ->value('anio');
+
+        $idPensum = DB::table('pensum')
+            ->where('id_carrera', $horario->id_carrera)
             ->where('estado', 'activo')
+            ->where('anio_inicio_vigencia', '<=', $anioPeriodo)
+            ->where(function ($q) use ($anioPeriodo) {
+                $q->whereNull('anio_fin_vigencia')
+                  ->orWhere('anio_fin_vigencia', '>=', $anioPeriodo);
+            })
+            ->orderByDesc('anio_inicio_vigencia')
             ->value('id_pensum');
 
         // Detalles activos con todos los campos requeridos
@@ -288,11 +297,20 @@ class HorarioConsultaService
             ];
         }
 
-        // Obtener pensum activo de esa carrera y período (para ciclo_semestre)
-        $idPensum = DB::table('pensum')
-            ->where('id_carrera',           $idCarrera)
+        // Obtener pensum vigente de esa carrera según el año del período (para ciclo_semestre)
+        $anioPeriodo = (int) DB::table('periodo_academico')
             ->where('id_periodo_academico', $idPeriodo)
+            ->value('anio');
+
+        $idPensum = DB::table('pensum')
+            ->where('id_carrera', $idCarrera)
             ->where('estado', 'activo')
+            ->where('anio_inicio_vigencia', '<=', $anioPeriodo)
+            ->where(function ($q) use ($anioPeriodo) {
+                $q->whereNull('anio_fin_vigencia')
+                  ->orWhere('anio_fin_vigencia', '>=', $anioPeriodo);
+            })
+            ->orderByDesc('anio_inicio_vigencia')
             ->value('id_pensum');
 
         $detalles = DB::table('detalle_horario as dh')

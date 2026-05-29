@@ -11,6 +11,7 @@ use App\Services\Reporte\ReporteDataService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\DB;
 use Maatwebsite\Excel\Facades\Excel;
 
 /**
@@ -141,10 +142,15 @@ class ReporteController extends Controller
             idCoord:   $idCoord,
         );
 
-        // Nombre del docente para el encabezado
-        $nombreDocente = empty($clases)
-            ? 'Docente'
-            : ((object) $clases[0])->nombre_docente ?? 'Docente';
+        // Nombre del docente para el encabezado.
+        // Se resuelve directamente por id_docente para que el título sea correcto
+        // incluso si el reporte no trae clases o si la consulta de clases no incluye
+        // el nombre del docente como columna.
+        $nombreDocente = DB::table('docente as d')
+            ->join('usuario as u', 'd.id_usuario', '=', 'u.id_usuario')
+            ->where('d.id_docente', $idDocente)
+            ->selectRaw("TRIM(CONCAT(u.nombres, ' ', u.apellidos)) as nombre_docente")
+            ->value('nombre_docente') ?: 'Docente';
 
         $nombre = "horario_docente_{$idDocente}";
 

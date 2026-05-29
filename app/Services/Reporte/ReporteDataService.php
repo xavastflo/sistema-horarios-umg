@@ -127,26 +127,39 @@ class ReporteDataService
             ])
             ->get();
 
-        // Resolver ciclo_semestre por horario (Horario → Carrera+Período → Pensum → PensumCurso)
-        // Se agrega como atributo a cada fila
         // Resolver ciclo_semestre por horario:
-        // Horario → id_carrera + id_periodo_academico → Pensum activo → Pensum_Curso
-        // Cache de id_horario → id_pensum para evitar queries repetidas
+        // Horario → id_carrera + año(periodo_academico) → Pensum vigente → Pensum_Curso
+        // REFACTOR PENSUM: ya no usa p.id_periodo_academico (campo eliminado).
+        // Cache id_horario → id_pensum para evitar queries repetidas.
         $pensumCache = [];
 
         return $clases->map(function ($row) use (&$pensumCache) {
             $idHorario = $row->id_horario;
 
             if (! array_key_exists($idHorario, $pensumCache)) {
-                // Obtener pensum activo de la carrera y período del horario
-                $pensumCache[$idHorario] = DB::table('pensum as p')
-                    ->join('horario as h', function ($join) {
-                        $join->on('p.id_carrera', '=', 'h.id_carrera')
-                             ->on('p.id_periodo_academico', '=', 'h.id_periodo_academico');
-                    })
+                // Obtener año del período del horario
+                $anio = (int) DB::table('horario as h')
+                    ->join('periodo_academico as pa', 'h.id_periodo_academico', '=', 'pa.id_periodo_academico')
                     ->where('h.id_horario', $idHorario)
-                    ->where('p.estado', 'activo')
-                    ->value('p.id_pensum');
+                    ->value('pa.anio');
+
+                $idCarreraH = (int) DB::table('horario')
+                    ->where('id_horario', $idHorario)
+                    ->value('id_carrera');
+
+                // Pensum vigente para la carrera en ese año (más reciente primero)
+                $pensumCache[$idHorario] = ($anio && $idCarreraH)
+                    ? DB::table('pensum')
+                        ->where('id_carrera', $idCarreraH)
+                        ->where('estado', 'activo')
+                        ->where('anio_inicio_vigencia', '<=', $anio)
+                        ->where(function ($q) use ($anio) {
+                            $q->whereNull('anio_fin_vigencia')
+                              ->orWhere('anio_fin_vigencia', '>=', $anio);
+                        })
+                        ->orderBy('anio_inicio_vigencia', 'desc')
+                        ->value('id_pensum')
+                    : null;
             }
 
             $idPensum = $pensumCache[$idHorario];
@@ -195,30 +208,44 @@ class ReporteDataService
         // Verificar que el horario pertenece a la carrera y período indicados
         $this->verificarHorarioPerteneceACarreraYPeriodo($idHorario, $idCarrera, $idPeriodo);
 
+        // Año del período — necesario para resolver el pensum vigente.
+        // REFACTOR PENSUM: ya no se usa p.id_periodo_academico en la tabla pensum.
+        $anio = (int) DB::table('periodo_academico')
+            ->where('id_periodo_academico', $idPeriodo)
+            ->value('anio');
+
         // ── Categoría 1: SIN_DOCENTE ──────────────────────────────
         $sinDocente = DB::table('seccion as s')
             ->join('curso as c', 's.id_curso', '=', 'c.id_curso')
-            ->leftJoin('pensum_curso as pc', function ($join) use ($idCarrera, $idPeriodo) {
+            ->leftJoin('pensum_curso as pc', function ($join) use ($idCarrera, $anio) {
                 $join->on('pc.id_curso', '=', 's.id_curso')
-                     ->whereExists(function ($sub) use ($idCarrera, $idPeriodo) {
+                     ->whereExists(function ($sub) use ($idCarrera, $anio) {
                          $sub->select(DB::raw(1))
                              ->from('pensum as p')
                              ->whereColumn('p.id_pensum', 'pc.id_pensum')
                              ->where('p.id_carrera', $idCarrera)
-                             ->where('p.id_periodo_academico', $idPeriodo)
-                             ->where('p.estado', 'activo');
+                             ->where('p.estado', 'activo')
+                             ->where('p.anio_inicio_vigencia', '<=', $anio)
+                             ->where(function ($q) use ($anio) {
+                                 $q->whereNull('p.anio_fin_vigencia')
+                                   ->orWhere('p.anio_fin_vigencia', '>=', $anio);
+                             });
                      })
                      ->where('pc.estado', 'activo');
             })
-            // Solo secciones de esta carrera (via pensum)
-            ->whereExists(function ($sub) use ($idCarrera, $idPeriodo) {
+            // Solo secciones de esta carrera (via pensum vigente del año)
+            ->whereExists(function ($sub) use ($idCarrera, $anio) {
                 $sub->select(DB::raw(1))
                     ->from('pensum_curso as pc2')
                     ->join('pensum as p2', 'pc2.id_pensum', '=', 'p2.id_pensum')
                     ->whereColumn('pc2.id_curso', 's.id_curso')
                     ->where('p2.id_carrera', $idCarrera)
-                    ->where('p2.id_periodo_academico', $idPeriodo)
                     ->where('p2.estado', 'activo')
+                    ->where('p2.anio_inicio_vigencia', '<=', $anio)
+                    ->where(function ($q) use ($anio) {
+                        $q->whereNull('p2.anio_fin_vigencia')
+                          ->orWhere('p2.anio_fin_vigencia', '>=', $anio);
+                    })
                     ->where('pc2.estado', 'activo');
             })
             // Sin asignación docente activa
@@ -251,26 +278,34 @@ class ReporteDataService
                 $join->on('adc.id_seccion', '=', 's.id_seccion')
                      ->where('adc.estado', 'activo');
             })
-            ->leftJoin('pensum_curso as pc', function ($join) use ($idCarrera, $idPeriodo) {
+            ->leftJoin('pensum_curso as pc', function ($join) use ($idCarrera, $anio) {
                 $join->on('pc.id_curso', '=', 's.id_curso')
-                     ->whereExists(function ($sub) use ($idCarrera, $idPeriodo) {
+                     ->whereExists(function ($sub) use ($idCarrera, $anio) {
                          $sub->select(DB::raw(1))
                              ->from('pensum as p')
                              ->whereColumn('p.id_pensum', 'pc.id_pensum')
                              ->where('p.id_carrera', $idCarrera)
-                             ->where('p.id_periodo_academico', $idPeriodo)
-                             ->where('p.estado', 'activo');
+                             ->where('p.estado', 'activo')
+                             ->where('p.anio_inicio_vigencia', '<=', $anio)
+                             ->where(function ($q) use ($anio) {
+                                 $q->whereNull('p.anio_fin_vigencia')
+                                   ->orWhere('p.anio_fin_vigencia', '>=', $anio);
+                             });
                      })
                      ->where('pc.estado', 'activo');
             })
-            ->whereExists(function ($sub) use ($idCarrera, $idPeriodo) {
+            ->whereExists(function ($sub) use ($idCarrera, $anio) {
                 $sub->select(DB::raw(1))
                     ->from('pensum_curso as pc2')
                     ->join('pensum as p2', 'pc2.id_pensum', '=', 'p2.id_pensum')
                     ->whereColumn('pc2.id_curso', 's.id_curso')
                     ->where('p2.id_carrera', $idCarrera)
-                    ->where('p2.id_periodo_academico', $idPeriodo)
                     ->where('p2.estado', 'activo')
+                    ->where('p2.anio_inicio_vigencia', '<=', $anio)
+                    ->where(function ($q) use ($anio) {
+                        $q->whereNull('p2.anio_fin_vigencia')
+                          ->orWhere('p2.anio_fin_vigencia', '>=', $anio);
+                    })
                     ->where('pc2.estado', 'activo');
             })
             // Sin detalle_horario activo en ESTE horario
@@ -336,20 +371,30 @@ class ReporteDataService
             $this->verificarHorarioPerteneceACarreraYPeriodo($idHorario, $idCarrera, $idPeriodo);
         }
 
+        // Año del período — necesario para resolver el pensum vigente.
+        // REFACTOR PENSUM: ya no se usa p.id_periodo_academico en la tabla pensum.
+        $anio = (int) DB::table('periodo_academico')
+            ->where('id_periodo_academico', $idPeriodo)
+            ->value('anio');
+
         $query = DB::table('asignacion_docente_curso as adc')
             ->join('docente as d',   'adc.id_docente',  '=', 'd.id_docente')
             ->join('usuario as u',   'd.id_usuario',    '=', 'u.id_usuario')
             ->join('seccion as s',   'adc.id_seccion',  '=', 's.id_seccion')
             ->join('curso as c',     's.id_curso',      '=', 'c.id_curso')
-            // Solo secciones de esta carrera (via pensum)
-            ->whereExists(function ($sub) use ($idCarrera, $idPeriodo) {
+            // Solo secciones de esta carrera (via pensum vigente del año)
+            ->whereExists(function ($sub) use ($idCarrera, $anio) {
                 $sub->select(DB::raw(1))
                     ->from('pensum_curso as pc')
                     ->join('pensum as p', 'pc.id_pensum', '=', 'p.id_pensum')
                     ->whereColumn('pc.id_curso', 's.id_curso')
                     ->where('p.id_carrera', $idCarrera)
-                    ->where('p.id_periodo_academico', $idPeriodo)
                     ->where('p.estado', 'activo')
+                    ->where('p.anio_inicio_vigencia', '<=', $anio)
+                    ->where(function ($q) use ($anio) {
+                        $q->whereNull('p.anio_fin_vigencia')
+                          ->orWhere('p.anio_fin_vigencia', '>=', $anio);
+                    })
                     ->where('pc.estado', 'activo');
             })
             ->where('s.id_periodo_academico', $idPeriodo)
